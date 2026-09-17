@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+
+{% block title %}管理后台 - 团队 AI 预约平台{% endblock %}
+
+{% block content %}
+
+<!-- 系统维护控制 -->
+<div class="card">
+    <div class="card-title">
+        <span>系统维护状态控制</span>
+        {% if is_maintenance %}
+            <span class="badge badge-danger">维护中</span>
+        {% else %}
+            <span class="badge badge-success">正常服务</span>
+        {% endif %}
+    </div>
+
+    <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: gap; gap: 1rem;">
+        <div>
+            {% if is_maintenance %}
+            <p style="color: var(--danger); font-weight: 600;">
+                系统处于维护状态（始于 {{ active_maintenance.started_at }}）。<br>
+                所有代理推理请求将直接拒绝（503），暂停所有新预约；受影响预约已作废并返还额度。
+            </p>
+            {% else %}
+            <p style="color: var(--gray-600);">
+                系统运行正常，用户可按预约正常使用 API 及管理预约。
+            </p>
+            {% endif %}
+        </div>
+        {% if is_maintenance %}
+        <form action="/app/admin/maintenance/disable" method="POST"
+              onsubmit="return confirm('确定要关闭系统维护并恢复正常服务吗？');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-primary">关闭维护并恢复</button>
+        </form>
+        {% else %}
+        <form action="/app/admin/maintenance/enable" method="POST"
+              onsubmit="return confirm('警告：开启维护将立即作废当前正在生效的预约并暂停所有新推理和新预约，确定继续？');">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-danger">立即开启维护</button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
+<!-- 成员管理 -->
+<div class="card">
+    <div class="card-title">
+        <span>团队成员管理</span>
+    </div>
+
+    <!-- 创建新成员 -->
+    <div style="background: var(--gray-100); padding: 1rem; border-radius: 0.375rem; margin-bottom: 1.5rem;">
+        <h4 style="margin-bottom: 0.75rem; font-size: 0.875rem; font-weight: 600;">创建新成员账号</h4>
+        <form action="/app/admin/users/create" method="POST" style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div style="flex: 1; min-width: 140px;">
+                <label for="new_username">用户名</label>
+                <input type="text" id="new_username" name="username" required placeholder="如 zhangsan">
+            </div>
+            <div style="flex: 1; min-width: 140px;">
+                <label for="new_display_name">显示姓名</label>
+                <input type="text" id="new_display_name" name="display_name" required placeholder="如 张三">
+            </div>
+            <div style="flex: 1; min-width: 160px;">
+                <label for="new_password">初始密码</label>
+                <input type="password" id="new_password" name="password" required minlength="4" placeholder="至少4位">
+            </div>
+            <div style="width: 140px;">
+                <label for="new_limit">每日时段上限</label>
+                <select id="new_limit" name="daily_slot_limit" style="width: 100%; height: 38px; border: 1px solid var(--gray-300); border-radius: 0.375rem; padding: 0 0.5rem; font-size: 0.875rem;">
+                    <option value="1" selected>1 个时段</option>
+                    <option value="2">2 个时段</option>
+                    <option value="3">3 个时段</option>
+                </select>
+            </div>
+            <button type="submit" class="btn btn-primary" style="height: 38px;">创建账号</button>
+        </form>
+    </div>
+
+    <!-- 成员列表 -->
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>用户名</th>
+                    <th>显示姓名</th>
+                    <th>角色</th>
+                    <th>状态</th>
+                    <th>需改密码</th>
+                    <th>每日时段上限</th>
+                    <th>当前 API Key</th>
+                    <th style="min-width: 320px;">操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for u in users %}
+                <tr>
+                    <td>{{ u.id }}</td>
+                    <td><strong>{{ u.username }}</strong></td>
+                    <td>{{ u.display_name }}</td>
+                    <td>
+                        {% if u.role == 'admin' %}
+                        <span class="badge badge-primary">管理员</span>
+                        {% else %}
+                        <span class="badge badge-gray">成员</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if u.is_active %}
+                        <span class="badge badge-success">正常</span>
+                        {% else %}
+                        <span class="badge badge-danger">已停用</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        {% if u.must_change_password %}
+                        <span class="badge badge-warning">是</span>
+                        {% else %}
+                        <span style="color: var(--gray-600); font-size: 0.75rem;">否</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <form action="/app/admin/users/{{ u.id }}/slot-limit" method="POST" style="display: flex; gap: 0.25rem; align-items: center;">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <select name="daily_slot_limit" style="height: 28px; font-size: 0.8rem; border: 1px solid var(--gray-300); border-radius: 0.25rem; padding: 0 0.25rem;">
+                                <option value="1" {% if u.daily_slot_limit == 1 %}selected{% endif %}>1 段/天</option>
+                                <option value="2" {% if u.daily_slot_limit == 2 %}selected{% endif %}>2 段/天</option>
+                                <option value="3" {% if u.daily_slot_limit == 3 %}selected{% endif %}>3 段/天</option>
+                            </select>
+                            <button type="submit" class="btn btn-secondary btn-sm" style="padding: 0.15rem 0.4rem; font-size: 0.75rem;">保存</button>
+                        </form>
+                    </td>
+                    <td style="font-family: monospace; font-size: 0.8rem;">
+                        {{ u.key_masked or '无' }}
+                    </td>
+                    <td>
+                        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                            <!-- 启用/停用 -->
+                            {% if u.id != current_user.id %}
+                            <form action="/app/admin/users/{{ u.id }}/toggle-active" method="POST"
+                                  onsubmit="return confirm('确定{% if u.is_active %}停用该账号（将立即取消其有效预约并失效会话）{% else %}重新启用该账号{% endif %}吗？');"
+                                  style="display: inline;">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                {% if u.is_active %}
+                                <button type="submit" class="btn btn-danger btn-sm">停用</button>
+                                {% else %}
+                                <button type="submit" class="btn btn-secondary btn-sm">启用</button>
+                                {% endif %}
+                            </form>
+                            {% endif %}
+
+                            <!-- 重置 Key -->
+                            <form action="/app/admin/users/{{ u.id }}/reset-key" method="POST"
+                                  onsubmit="return confirm('确定代其重置 API Key 吗？');"
+                                  style="display: inline;">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <button type="submit" class="btn btn-secondary btn-sm">重置Key</button>
+                            </form>
+
+                            <!-- 重置密码 -->
+                            <form action="/app/admin/users/{{ u.id }}/reset-password" method="POST"
+                                  onsubmit="const p = prompt('请输入用户 ' + '{{ u.username }}' + ' 的新密码：'); if (!p) return false; this.new_password.value = p; return true;"
+                                  style="display: inline;">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <input type="hidden" name="new_password" value="">
+                                <button type="submit" class="btn btn-secondary btn-sm">重置密码</button>
+                            </form>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<!-- 有效预约管理 -->
+<div class="card">
+    <div class="card-title">
+        <span>当前有效预约列表（管理员可直接作废）</span>
+    </div>
+    {% if active_reservations %}
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>预约ID</th>
+                    <th>日期</th>
+                    <th>时段</th>
+                    <th>时间范围</th>
+                    <th>预约成员</th>
+                    <th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in active_reservations %}
+                <tr>
+                    <td>{{ r.id }}</td>
+                    <td>{{ r.date }}</td>
+                    <td>第 {{ r.slot_index + 1 }} 时段</td>
+                    <td>{{ r.start_at[11:16] }}–{{ r.end_at[11:16] }}</td>
+                    <td><strong>{{ r.display_name }}</strong> ({{ r.username }})</td>
+                    <td>
+                        <form action="/app/admin/reservations/{{ r.id }}/cancel" method="POST"
+                              onsubmit="return confirm('确定取消成员 {{ r.display_name }} 的该笔预约吗？');"
+                              style="display: inline;">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                            <button type="submit" class="btn btn-danger btn-sm">作废此预约</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <p style="color: var(--gray-600); font-size: 0.875rem;">当前无有效预约记录。</p>
+    {% endif %}
+</div>
+
+{% endblock %}

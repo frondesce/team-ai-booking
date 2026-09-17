@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+
+{% block title %}预约时段与配置 - 团队 AI 预约平台{% endblock %}
+
+{% block content %}
+
+<div id="keyAlertContainer"></div>
+
+<!-- API Key 与客户端配置 -->
+<div class="card">
+    <div class="card-title">
+        <span>个人 API Key 与客户端接入说明</span>
+    </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 2rem;">
+        <div style="flex: 1; min-width: 300px;">
+            <p style="margin-bottom: 0.5rem; font-size: 0.875rem; color: var(--gray-600);">当前有效 API Key：</p>
+            <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
+                <span id="activeKeyMasked" style="font-family: monospace; font-weight: 600; font-size: 1rem;">
+                    {% if user_api_key %}{{ user_api_key.key_masked }}{% else %}<span style="color: var(--gray-600);">（尚未生成 API Key）</span>{% endif %}
+                </span>
+                <button type="button" class="btn btn-secondary btn-sm" id="rotateKeyBtn" onclick="rotateApiKey()">
+                    {% if user_api_key %}重置 Key{% else %}生成 Key{% endif %}
+                </button>
+            </div>
+            <p style="font-size: 0.8125rem; color: var(--gray-600); margin-top: 0.5rem;">
+                <strong>您的每日预约额度：</strong>{{ current_user.daily_slot_limit }} 个时段/天（每段 1 小时，可连续或分散）。<br>
+                注：每个账号仅持有一个有效 Key。重置 Key 不影响已有预约与当天额度。
+            </p>
+        </div>
+
+        <div style="flex: 1; min-width: 320px; border-left: 1px solid var(--border-color); padding-left: 1.5rem;">
+            <div style="margin-bottom: 0.75rem;">
+                <strong>API Base URL:</strong> <code>{{ public_base_url }}/v1</code>
+            </div>
+            <div style="margin-bottom: 0.75rem;">
+                <strong>模型名称 (Model Alias):</strong> <code>{{ model_alias }}</code>
+            </div>
+            <details style="font-size: 0.875rem;">
+                <summary style="cursor: pointer; color: var(--primary); font-weight: 500;">查看 curl 调用示例</summary>
+                <pre style="margin-top: 0.5rem;">curl -X POST {{ public_base_url }}/v1/chat/completions \
+  -H "Authorization: Bearer &lt;您的个人Key&gt;" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "{{ model_alias }}",
+    "messages": [{"role": "user", "content": "你好"}],
+    "stream": true
+  }'</pre>
+            </details>
+        </div>
+    </div>
+</div>
+
+<!-- 预约表格 -->
+<div class="card">
+    <div class="card-title">
+        <span>三天预约时间表（服务器当前时间：{{ grid.now_formatted }}）</span>
+        <a href="/app/" class="btn btn-secondary btn-sm">刷新状态</a>
+    </div>
+    
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 140px;">时段（固定9时段）</th>
+                    {% for d in grid.dates %}
+                    <th style="min-width: 220px;">
+                        {{ d }}
+                        {% if loop.index == 1 %}（今天）{% elif loop.index == 2 %}（明天）{% elif loop.index == 3 %}（后天）{% endif %}
+                    </th>
+                    {% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in grid.rows %}
+                <tr>
+                    <td style="font-weight: 600; background: #f9fafb;">{{ row.label }}</td>
+                    {% for cell in row.cells %}
+                    <td>
+                        {% if cell.reservation %}
+                            <div style="margin-bottom: 0.4rem;">
+                                {% if cell.reservation.is_mine %}
+                                    <span class="badge badge-primary">已由您预约</span>
+                                {% else %}
+                                    <span class="badge badge-gray">已由 {{ cell.reservation.display_name }} 预约</span>
+                                {% endif %}
+                                {% if cell.is_running %}
+                                    <span class="badge badge-success">生效中</span>
+                                {% endif %}
+                            </div>
+
+                            {% if cell.reservation.can_cancel %}
+                            <form action="/app/reservations/{{ cell.reservation.id }}/cancel" method="POST" onsubmit="return confirm('确定取消该预约并返还当天预约资格吗？');">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <button type="submit" class="btn btn-danger btn-sm">取消预约</button>
+                            </form>
+                            {% elif cell.reservation.is_mine and (cell.is_running or cell.is_past) %}
+                                <span style="font-size: 0.75rem; color: var(--gray-600);">不可取消</span>
+                            {% endif %}
+                        {% elif cell.is_past %}
+                            <span class="badge badge-gray">已结束</span>
+                        {% elif cell.is_running %}
+                            <span class="badge badge-gray">已开始未预约</span>
+                        {% elif is_maintenance %}
+                            <span class="badge badge-danger">系统维护</span>
+                        {% elif cell.can_reserve %}
+                            <form action="/app/reservations" method="POST">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <input type="hidden" name="date" value="{{ cell.date }}">
+                                <input type="hidden" name="slot_index" value="{{ cell.slot_index }}">
+                                <button type="submit" class="btn btn-primary btn-sm">预约此段</button>
+                            </form>
+                        {% else %}
+                            <span class="badge badge-gray">不可预约</span>
+                        {% endif %}
+                    </td>
+                    {% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <div style="margin-top: 1rem; font-size: 0.8125rem; color: var(--gray-600); line-height: 1.6;">
+        <strong>预约规则提示：</strong><br>
+        1. 每天开放 09:30–18:30 共 9 个时段；仅可预约尚未开始的完整时段。<br>
+        2. 每名成员每天可预约时段数由管理员配置（默认 1，可设为 1、2 或 3 段），允许连续或分散预约；若取消未开始的预约，可返还当天对应额度。<br>
+        3. 时段一旦到达开始时间即不可自行取消，自然结束后仍占用当天资格。系统维护期间推理及预约暂停。
+    </div>
+</div>
+
+<script>
+function rotateApiKey() {
+    const isReset = {% if user_api_key %}true{% else %}false{% endif %};
+    const confirmMsg = isReset 
+        ? '重置后旧 API Key 将立即失效并不可恢复，确定要重置吗？'
+        : '确定要生成个人 API Key 吗？';
+    if (!confirm(confirmMsg)) {
+        return;
+    }
+    const btn = document.getElementById('rotateKeyBtn');
+    btn.disabled = true;
+    btn.textContent = '处理中...';
+
+    fetch('/app/api-key/rotate', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'Accept': 'application/json'
+        },
+        body: 'csrf_token=' + encodeURIComponent('{{ csrf_token }}')
+    })
+    .then(r => r.json())
+    .then(data => {
+        btn.disabled = false;
+        btn.textContent = '重置 Key';
+        if (data.raw_key) {
+            document.getElementById('activeKeyMasked').textContent = data.key_masked;
+            const container = document.getElementById('keyAlertContainer');
+            container.innerHTML = `
+                <div class="alert alert-warning" style="border: 2px solid #f59e0b;">
+                    <h4 style="margin-bottom: 0.5rem; font-weight: 700;">⚠️ 个人 API Key 已生成（仅展示一次）</h4>
+                    <p>请立即复制并妥善保管您的个人 API Key，离开或刷新页面后将无法再次查看完整明文：</p>
+                    <div style="margin: 0.75rem 0; display: flex; gap: 0.5rem; align-items: center;">
+                        <input type="text" id="rawKeyInput" value="${data.raw_key}" readonly style="font-family: monospace; font-size: 1rem; font-weight: bold; background: #fff;">
+                        <button type="button" class="btn btn-secondary" onclick="navigator.clipboard.writeText(document.getElementById('rawKeyInput').value); alert('已复制到剪贴板！');">复制</button>
+                    </div>
+                </div>
+            `;
+            container.scrollIntoView({ behavior: 'smooth' });
+        } else {
+            alert(data.error?.message || '生成 Key 失败');
+        }
+    })
+    .catch(err => {
+        btn.disabled = false;
+        btn.textContent = isReset ? '重置 Key' : '生成 Key';
+        alert('请求失败，请稍后重试');
+    });
+}
+</script>
+
+{% endblock %}

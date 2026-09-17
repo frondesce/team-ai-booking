@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}团队 AI 预约平台{% endblock %}</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-hover: #1d4ed8;
+            --danger: #dc2626;
+            --danger-hover: #b91c1c;
+            --warning: #f59e0b;
+            --success: #16a34a;
+            --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb;
+            --gray-300: #d1d5db;
+            --gray-600: #4b5563;
+            --gray-700: #374151;
+            --gray-800: #1f2937;
+            --border-color: #e5e7eb;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+            background-color: #f8fafc;
+            color: var(--gray-800);
+            line-height: 1.5;
+        }
+        .header {
+            background-color: #ffffff;
+            border-bottom: 1px solid var(--border-color);
+            padding: 0.75rem 1.5rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            color: var(--gray-800);
+            text-decoration: none;
+        }
+        .header-user {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+            font-size: 0.875rem;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 1.5rem auto;
+            padding: 0 1rem;
+        }
+        .card {
+            background: #ffffff;
+            border: 1px solid var(--border-color);
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+        }
+        .card-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .alert {
+            padding: 0.75rem 1rem;
+            border-radius: 0.375rem;
+            margin-bottom: 1rem;
+            font-size: 0.875rem;
+        }
+        .alert-danger { background-color: #fee2e2; border: 1px solid #fca5a5; color: #991b1b; }
+        .alert-warning { background-color: #fef3c7; border: 1px solid #fcd34d; color: #92400e; }
+        .alert-success { background-color: #dcfce7; border: 1px solid #86efac; color: #166534; }
+        .alert-info { background-color: #e0f2fe; border: 1px solid #7dd3fc; color: #075985; }
+        
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0.4rem 0.85rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            border-radius: 0.375rem;
+            border: 1px solid transparent;
+            cursor: pointer;
+            text-decoration: none;
+            transition: background-color 0.15s ease;
+        }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .btn-primary { background-color: var(--primary); color: #fff; }
+        .btn-primary:hover:not(:disabled) { background-color: var(--primary-hover); }
+        .btn-danger { background-color: var(--danger); color: #fff; }
+        .btn-danger:hover:not(:disabled) { background-color: var(--danger-hover); }
+        .btn-secondary { background-color: var(--gray-100); color: var(--gray-700); border-color: var(--gray-300); }
+        .btn-secondary:hover:not(:disabled) { background-color: var(--gray-200); }
+        .btn-sm { padding: 0.25rem 0.5rem; font-size: 0.75rem; }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            text-align: left;
+            font-size: 0.875rem;
+        }
+        th, td {
+            padding: 0.75rem 1rem;
+            border: 1px solid var(--border-color);
+        }
+        th { background-color: #f9fafb; font-weight: 600; }
+        .badge {
+            display: inline-block;
+            padding: 0.2rem 0.5rem;
+            border-radius: 9999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .badge-success { background: #dcfce7; color: #166534; }
+        .badge-danger { background: #fee2e2; color: #991b1b; }
+        .badge-warning { background: #fef3c7; color: #92400e; }
+        .badge-gray { background: #f3f4f6; color: #4b5563; }
+        .badge-primary { background: #dbeafe; color: #1e40af; }
+        
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        label {
+            display: block;
+            margin-bottom: 0.25rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--gray-700);
+        }
+        input[type="text"], input[type="password"] {
+            width: 100%;
+            padding: 0.5rem 0.75rem;
+            border: 1px solid var(--gray-300);
+            border-radius: 0.375rem;
+            font-size: 0.875rem;
+        }
+        input[type="text"]:focus, input[type="password"]:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 2px rgba(37,99,235,0.2);
+        }
+        code, pre {
+            background-color: #f1f5f9;
+            padding: 0.2rem 0.4rem;
+            border-radius: 0.25rem;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.85em;
+        }
+        pre {
+            padding: 1rem;
+            overflow-x: auto;
+            border: 1px solid var(--gray-200);
+        }
+    </style>
+    <script>
+        // Prevent double submit on forms
+        document.addEventListener("DOMContentLoaded", function() {
+            document.querySelectorAll("form").forEach(function(form) {
+                form.addEventListener("submit", function() {
+                    const btns = form.querySelectorAll("button[type='submit']");
+                    btns.forEach(function(btn) {
+                        btn.disabled = true;
+                        btn.innerText = "处理中...";
+                    });
+                });
+            });
+        });
+    </script>
+</head>
+<body>
+    <header class="header">
+        <div>
+            <a href="/app/" class="header-title">团队 AI 预约平台</a>
+            {% if is_maintenance %}
+            <span class="badge badge-danger" style="margin-left: 0.5rem;">系统维护中</span>
+            {% endif %}
+        </div>
+        {% if current_user %}
+        <div class="header-user">
+            <span>{{ current_user.display_name }} ({{ current_user.username }})
+                {% if current_user.role == 'admin' %}<span class="badge badge-primary">管理员</span>{% endif %}
+            </span>
+            {% if current_user.role == 'admin' %}
+            <a href="/app/admin" class="btn btn-secondary btn-sm">管理后台</a>
+            {% endif %}
+            <a href="/app/change-password" class="btn btn-secondary btn-sm">修改密码</a>
+            <form action="/app/logout" method="POST" style="display: inline;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button type="submit" class="btn btn-secondary btn-sm">退出</button>
+            </form>
+        </div>
+        {% endif %}
+    </header>
+
+    <div class="container">
+        {% if is_maintenance %}
+        <div class="alert alert-danger" style="font-weight: 600; font-size: 1rem;">
+            ⚠️ 系统维护中：所有推理请求和新预约已暂停，已预约但在维护期开始的时段已作废。维护结束后可预约后续未开始的空闲时段。
+        </div>
+        {% endif %}
+
+        {% if error_msg %}
+        <div class="alert alert-danger">{{ error_msg }}</div>
+        {% endif %}
+        {% if success_msg %}
+        <div class="alert alert-success">{{ success_msg }}</div>
+        {% endif %}
+
+        {% block content %}{% endblock %}
+    </div>
+</body>
+</html>
