@@ -109,6 +109,8 @@
                                 <input type="hidden" name="slot_index" value="{{ cell.slot_index }}">
                                 <button type="submit" class="btn btn-primary btn-sm">预约此段</button>
                             </form>
+                        {% elif cell.quota_reached and cell.is_future %}
+                            <button type="button" class="btn btn-secondary btn-sm" disabled>额度已满</button>
                         {% else %}
                             <span class="badge badge-gray">不可预约</span>
                         {% endif %}

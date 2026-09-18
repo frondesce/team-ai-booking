@@ -270,8 +270,18 @@ def get_schedule_grid(conn: sqlite3.Connection, current_user_id: Optional[int] =
         dates
     )
     confirmed_map: Dict[Tuple[str, int], sqlite3.Row] = {}
+    user_counts_by_date: Dict[str, int] = {d: 0 for d in dates}
     for row in cur.fetchall():
         confirmed_map[(row["date"], row["slot_index"])] = row
+        if current_user_id is not None and row["user_id"] == current_user_id:
+            user_counts_by_date[row["date"]] = user_counts_by_date.get(row["date"], 0) + 1
+
+    user_daily_limit = 1
+    if current_user_id is not None:
+        cur_user = conn.execute("SELECT daily_slot_limit FROM users WHERE id = ?", (current_user_id,))
+        user_row = cur_user.fetchone()
+        if user_row and "daily_slot_limit" in user_row.keys():
+            user_daily_limit = user_row["daily_slot_limit"]
 
     rows = []
     for slot_idx in range(len(SLOT_DEFINITIONS)):
@@ -282,6 +292,7 @@ def get_schedule_grid(conn: sqlite3.Connection, current_user_id: Optional[int] =
             is_past = (now_dt >= end_dt)
             is_running = (start_dt <= now_dt < end_dt)
             is_future = (now_dt < start_dt)
+            quota_reached = (current_user_id is not None and user_counts_by_date.get(d, 0) >= user_daily_limit)
 
             res = confirmed_map.get((d, slot_idx))
             cell = {
@@ -292,7 +303,8 @@ def get_schedule_grid(conn: sqlite3.Connection, current_user_id: Optional[int] =
                 "is_past": is_past,
                 "is_running": is_running,
                 "is_future": is_future,
-                "can_reserve": (is_future and res is None and not is_maintenance),
+                "quota_reached": quota_reached,
+                "can_reserve": (is_future and res is None and not is_maintenance and not quota_reached),
                 "reservation": None
             }
 
