@@ -169,7 +169,12 @@ class WebHandler:
         if path in ("/app", "/app/"):
             now = TimeProvider.now()
             with self.db.transaction() as conn:
-                grid = get_schedule_grid(conn, current_user_id=session["user_id"], now_dt=now)
+                grid = get_schedule_grid(
+                    conn,
+                    current_user_id=session["user_id"],
+                    now_dt=now,
+                    is_admin=(session["role"] == "admin")
+                )
                 api_key_row = get_active_api_key_for_user(conn, session["user_id"])
                 active_m = get_active_maintenance(conn)
 

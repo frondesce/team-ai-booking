@@ -80,8 +80,10 @@
                             <div style="margin-bottom: 0.4rem;">
                                 {% if cell.reservation.is_mine %}
                                     <span class="badge badge-primary">已由您预约</span>
-                                {% else %}
+                                {% elif current_user.role == 'admin' and cell.reservation.display_name %}
                                     <span class="badge badge-gray">已由 {{ cell.reservation.display_name }} 预约</span>
+                                {% else %}
+                                    <span class="badge badge-gray">已被预约</span>
                                 {% endif %}
                                 {% if cell.is_running %}
                                     <span class="badge badge-success">生效中</span>

@@ -246,7 +246,7 @@ def check_active_reservation_for_user(conn: sqlite3.Connection, user_id: int, no
     return cur.fetchone()
 
 
-def get_schedule_grid(conn: sqlite3.Connection, current_user_id: Optional[int] = None, now_dt: Optional[datetime.datetime] = None) -> Dict[str, Any]:
+def get_schedule_grid(conn: sqlite3.Connection, current_user_id: Optional[int] = None, now_dt: Optional[datetime.datetime] = None, is_admin: bool = False) -> Dict[str, Any]:
     """
     Returns data structure for rendering the 3-day x 9-slot schedule grid.
     """
@@ -309,12 +309,13 @@ def get_schedule_grid(conn: sqlite3.Connection, current_user_id: Optional[int] =
             }
 
             if res is not None:
+                is_mine = (current_user_id is not None and res["user_id"] == current_user_id)
                 cell["reservation"] = {
-                    "id": res["id"],
-                    "user_id": res["user_id"],
-                    "display_name": res["display_name"],
-                    "is_mine": (current_user_id is not None and res["user_id"] == current_user_id),
-                    "can_cancel": (is_future and current_user_id is not None and res["user_id"] == current_user_id)
+                    "id": res["id"] if (is_mine or is_admin) else None,
+                    "user_id": res["user_id"] if (is_mine or is_admin) else None,
+                    "display_name": res["display_name"] if (is_mine or is_admin) else None,
+                    "is_mine": is_mine,
+                    "can_cancel": (is_future and is_mine)
                 }
             slot_cells.append(cell)
 
