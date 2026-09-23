@@ -28,7 +28,7 @@ def main():
     print(f"=== 团队 AI 预约平台已启动 ===")
     print(f"网页界面与 API 监听: http://{config.host}:{config.port}/app/")
     print(f"上游后端服务地址: {config.backend_url}")
-    print(f"可预约模型: {', '.join(model['model_alias'] for model in config.get_booking_models())}")
+    print(f"可预约模型: {', '.join(model['model_name'] for model in config.get_booking_models())}")
     print(f"数据持久化文件: {config.db_path}")
 
     try:

@@ -91,7 +91,7 @@ def reconcile_maintenance(conn: sqlite3.Connection, now_dt: Optional[datetime.da
     return invalidated_count
 
 
-def create_reservation(conn: sqlite3.Connection, user_id: int, date_str: str, slot_index: int, now_dt: Optional[datetime.datetime] = None, model_id: str = "default") -> int:
+def create_reservation(conn: sqlite3.Connection, user_id: int, date_str: str, slot_index: int, now_dt: Optional[datetime.datetime] = None, *, model_id: str) -> int:
     """
     Creates a new reservation with strict checks:
     - Reconcile maintenance first
@@ -134,7 +134,7 @@ def create_reservation(conn: sqlite3.Connection, user_id: int, date_str: str, sl
     # Check user daily quota limit across all models
     cur_user = conn.execute("SELECT daily_slot_limit FROM users WHERE id = ?", (user_id,))
     user_row = cur_user.fetchone()
-    daily_limit = user_row["daily_slot_limit"] if (user_row and "daily_slot_limit" in user_row.keys()) else 1
+    daily_limit = user_row["daily_slot_limit"] if user_row else 1
 
     cur_count = conn.execute(
         "SELECT COUNT(*) as count FROM reservations WHERE user_id = ? AND date = ? AND status = 'confirmed'",
@@ -244,7 +244,7 @@ def cancel_reservation_by_admin(conn: sqlite3.Connection, admin_id: int, reserva
     add_audit_log(conn, admin_id, "admin_cancel_reservation", f"Reservation {reservation_id} cancelled by admin, reason: {reason}", now_dt)
 
 
-def check_active_reservation_for_user(conn: sqlite3.Connection, user_id: int, now_dt: Optional[datetime.datetime] = None, model_id: str = "default") -> Optional[sqlite3.Row]:
+def check_active_reservation_for_user(conn: sqlite3.Connection, user_id: int, now_dt: Optional[datetime.datetime] = None, *, model_id: str) -> Optional[sqlite3.Row]:
     """
     Checks if user has an active, valid reservation right at now_dt for model_id:
     Half-open interval [start_at, end_at): start_at <= now < end_at.
@@ -274,7 +274,7 @@ def check_active_reservation_for_user(conn: sqlite3.Connection, user_id: int, no
     return cur.fetchone()
 
 
-def get_schedule_grid(conn: sqlite3.Connection, current_user_id: Optional[int] = None, now_dt: Optional[datetime.datetime] = None, is_admin: bool = False, model_id: str = "default") -> Dict[str, Any]:
+def get_schedule_grid(conn: sqlite3.Connection, current_user_id: Optional[int] = None, now_dt: Optional[datetime.datetime] = None, is_admin: bool = False, *, model_id: str) -> Dict[str, Any]:
     """
     Returns data structure for rendering the 3-day x 9-slot schedule grid for model_id.
     """
@@ -299,7 +299,7 @@ def get_schedule_grid(conn: sqlite3.Connection, current_user_id: Optional[int] =
     if current_user_id is not None:
         cur_user = conn.execute("SELECT daily_slot_limit FROM users WHERE id = ?", (current_user_id,))
         user_row = cur_user.fetchone()
-        if user_row and "daily_slot_limit" in user_row.keys():
+        if user_row:
             user_daily_limit = user_row["daily_slot_limit"]
 
         placeholders = ",".join("?" for _ in dates)
@@ -447,7 +447,7 @@ def cancel_inactive_model_reservations(conn: sqlite3.Connection, now_dt: Optiona
     cur = conn.execute(
         """
         SELECT r.id, r.user_id, r.model_id, r.date, r.slot_index, r.start_at, r.end_at,
-               u.username, u.display_name, m.model_alias
+               u.username, u.display_name, m.model_name
         FROM reservations r
         JOIN users u ON r.user_id = u.id
         JOIN booking_models m ON r.model_id = m.id
@@ -471,7 +471,7 @@ def cancel_inactive_model_reservations(conn: sqlite3.Connection, now_dt: Optiona
             (now_str, r["id"])
         )
         detail = (
-            f"Reservation {r['id']} for model '{r['model_id']}' ({r['model_alias']}) "
+            f"Reservation {r['id']} for model '{r['model_id']}' ({r['model_name']}) "
             f"owned by user {r['user_id']} ({r['username']}) cancelled due to model deactivation: 模型停用"
         )
         add_audit_log(conn, None, "model_deactivation_cancel", detail, now_dt)

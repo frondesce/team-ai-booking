@@ -38,7 +38,7 @@ class ProxyHandler:
     def __init__(self, db: Database, config: AppConfig):
         self.db = db
         self.config = config
-        self.booking_models = {model["model_alias"]: model for model in config.get_booking_models()}
+        self.booking_models = {model["model_name"]: model for model in config.get_booking_models()}
         
         # Create session with ZERO retries to avoid duplicating inference requests
         # and trust_env=False to avoid proxying local/internal calls through environment proxies
@@ -51,7 +51,7 @@ class ProxyHandler:
     def is_allowed_path(self, path: str) -> bool:
         return path in ALLOWED_PROXY_PATHS
 
-    def authenticate_and_authorize(self, auth_header: Optional[str], path: str, model_id: str = "default") -> Tuple[Optional[int], Optional[Dict[str, Any]]]:
+    def authenticate_and_authorize(self, auth_header: Optional[str], path: str, model_id: str) -> Tuple[Optional[int], Optional[Dict[str, Any]]]:
         """
         Returns (user_id, error_dict)
         error_dict: {"status": int, "code": str, "message": str} or None if authorized.
@@ -170,11 +170,11 @@ class ProxyHandler:
             return
         if "model" not in payload and len(self.booking_models) == 1:
             payload["model"] = next(iter(self.booking_models))
-        alias = payload.get("model")
-        if not isinstance(alias, str) or alias not in self.booking_models:
+        model_name = payload.get("model")
+        if not isinstance(model_name, str) or model_name not in self.booking_models:
             http_handler.send_error_json(400, "invalid_model", "请在 model 字段填写已配置的模型名称")
             return
-        model_id = self.booking_models[alias]["id"]
+        model_id = self.booking_models[model_name]["id"]
         try:
             body_bytes = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
         except (ValueError, UnicodeError):

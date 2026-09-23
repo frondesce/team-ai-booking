@@ -147,7 +147,7 @@ class WebHandler:
                     """
                     SELECT r.id, r.user_id, r.model_id, r.date, r.slot_index, r.start_at, r.end_at,
                            u.username, u.display_name,
-                           m.name as model_name, m.model_alias
+                           m.model_name
                     FROM reservations r
                     JOIN users u ON r.user_id = u.id
                     LEFT JOIN booking_models m ON r.model_id = m.id
@@ -174,10 +174,12 @@ class WebHandler:
 
         # Main schedule and key page: /app or /app/
         if path in ("/app", "/app/"):
-            model_id = query.get("model_id", ["default"])[0].strip() or "default"
+            model_id = query.get("model_id", [""])[0].strip()
             now = TimeProvider.now()
             with self.db.transaction() as conn:
                 active_models = list_booking_models(conn, include_inactive=False)
+                if not model_id and active_models:
+                    model_id = active_models[0]["id"]
                 selected_model = get_booking_model(conn, model_id)
                 if selected_model is None:
                     http_handler.send_error_json(404, "model_not_found", f"所选模型 '{model_id}' 不存在")
@@ -203,7 +205,7 @@ class WebHandler:
                 user_api_key=dict(api_key_row) if api_key_row else None,
                 raw_api_key_once=None,
                 public_base_url=self.config.public_base_url.rstrip("/"),
-                model_alias=selected_model["model_alias"],
+                model_name=selected_model["model_name"],
                 selected_model=dict(selected_model),
                 selected_model_id=model_id,
                 booking_models=[dict(m) for m in active_models],
@@ -309,7 +311,7 @@ class WebHandler:
 
         # Create reservation
         if path == "/app/reservations":
-            model_id = form_data.get("model_id", "default").strip() or "default"
+            model_id = form_data.get("model_id", "").strip()
             date_str = form_data.get("date", "").strip()
             slot_index_str = form_data.get("slot_index", "").strip()
 
@@ -332,7 +334,7 @@ class WebHandler:
             try:
                 with self.db.transaction() as conn:
                     create_reservation(conn, session["user_id"], date_str, slot_index, now, model_id=model_id)
-                msg = urllib.parse.quote(f"成功预约 {m['model_alias']} 在 {date_str} 第 {slot_index + 1} 时段！")
+                msg = urllib.parse.quote(f"成功预约 {m['model_name']} 在 {date_str} 第 {slot_index + 1} 时段！")
                 http_handler.redirect(f"/app/?model_id={urllib.parse.quote(model_id)}&success={msg}")
             except ReservationError as e:
                 msg = urllib.parse.quote(e.message)

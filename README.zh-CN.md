@@ -30,7 +30,7 @@ python -m pip install -r requirements.txt
 cp config.example.json config.json
 ```
 
-编辑 `config.json`：将 `backend_url` 设为模型服务地址，`model_alias` 设为后端接受的模型名，`public_base_url` 设为成员访问本平台的地址。模型服务需要鉴权时，通过环境变量 `LLAMA_BACKEND_KEY` 提供后端 key，例如在 Bash 中交互输入：
+编辑 `config.json`：将 `backend_url` 设为模型服务地址，`model_name` 设为后端接受的模型名，`public_base_url` 设为成员访问本平台的地址。模型服务需要鉴权时，通过环境变量 `LLAMA_BACKEND_KEY` 提供后端 key，例如在 Bash 中交互输入：
 
 ```bash
 read -r -s -p 'Backend API key: ' LLAMA_BACKEND_KEY
@@ -56,22 +56,22 @@ python run.py
 
 ## 多模型与预约人数
 
-原有配置继续使用 `model_alias`，默认只提供一个模型，每时段 1 人。需要多个模型时，在 `config.json` 中增加模型列表并重启：
+单模型场景可直接配置顶层 `model_name`（`booking_models` 保持省略或为 `null`），作为便捷配置使用，默认每时段 1 人。需要配置多个模型或自定义模型 ID 时，在 `config.json` 中配置 `booking_models` 并重启：
 
 ```json
 {
   "booking_models": [
-    {"id": "default", "name": "Model A", "model_alias": "model-a"},
-    {"id": "model-b", "name": "Model B", "model_alias": "model-b"}
+    {"id": "model-a", "model_name": "model-a"},
+    {"id": "model-b", "model_name": "model-b"}
   ]
 }
 ```
 
-`model_alias` 必须填写后端网关接受的实际模型名。保持 `id` 稳定，并保留 `default`：升级前的预约归属于这个模型。成员在预约页面选择模型，在客户端请求的 `model` 字段填写对应别名。代理按该模型检查预约，预约 Model A 不能调用 Model B。配置多个模型后，所有支持的推理接口均须填写 `model`；只有一个模型时可省略并自动使用该模型，明确填写未知模型名仍会被拒绝。
+`model_name` 必须填写后端网关接受的实际模型名。保持 `id` 稳定。任何模型 ID 均可按需移除，但模型列表中仍须至少保留一个模型。成员在预约页面选择模型，在客户端请求的 `model` 字段填写对应模型名称。代理按该模型检查预约，预约 Model A 不能调用 Model B。配置多个模型后，所有支持的推理接口均须填写 `model`；只有一个模型时可省略并自动使用该模型，明确填写未知模型名仍会被拒绝。
 
 在 `/app/admin` 分别设置每个模型的每时段人数，例如 Model A 2 人、Model B 1 人。人数持久化到 SQLite，保存后立即生效；调低人数不取消已有预约，人数达到或超过上限的时段不能新增预约。所有模型共用 `backend_url` 和后端凭据，由后端网关（例如 New API）按模型名路由、在多个模型实例之间分配请求。预约人数不负责分配 GPU、选择实例或限制推理请求并发数。
 
-升级前备份数据库；启动时会自动将旧预约迁移到 `default` 模型、升级旧版每日额度约束并保留历史。其他模型从配置中移除并重启后，停止接受其新预约和 API 调用，自动取消该模型正在进行和未来的有效预约，返还对应每日额度并记录审计日志。已结束的预约保留，仍计入当天额度。重新加入相同模型 ID 会保留原容量，但不恢复已取消的预约。如需回退旧版单模型程序，应同时恢复升级前的数据库备份。
+本版本首次启动时创建新数据库，后续重启沿用该数据库，不支持原地升级旧数据库。重新部署或全新上线时，请使用新的空数据目录（或自行备份移走旧目录数据），并重新创建管理员账号；程序不会自动删除旧数据库。正常运行中，若将某个模型从配置中移除并重启，程序会在启动事务中停用该模型，停止接受其新预约和 API 调用，并自动取消该模型所有未结束（含进行中与未来）的有效预约，返还对应每日额度并记录审计日志。已结束的预约保留，仍计入当天额度。重新加入相同模型 ID 会保留原时段容量，但不恢复已取消的预约。
 
 ## 部署
 

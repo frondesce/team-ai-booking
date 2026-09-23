@@ -63,7 +63,7 @@
             <tbody>
                 {% for m in booking_models %}
                 <tr>
-                    <td><code>{{ m.model_alias }}</code></td>
+                    <td><code>{{ m.model_name }}</code></td>
                     <td>
                         <form action="/app/admin/models/{{ m.id }}/capacity" method="POST" style="display: flex; gap: 0.5rem; align-items: center;">
                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -219,7 +219,7 @@
                 {% for r in active_reservations %}
                 <tr>
                     <td>{{ r.id }}</td>
-                    <td><code>{{ r.model_alias or r.model_id }}</code></td>
+                    <td><code>{{ r.model_name or r.model_id }}</code></td>
                     <td>{{ r.date }}</td>
                     <td>{{ r.start_at[11:16] }}–{{ r.end_at[11:16] }}</td>
                     <td><strong>{{ r.display_name }}</strong> ({{ r.username }})</td>
