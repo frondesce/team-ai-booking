@@ -1,6 +1,7 @@
 import os
 import json
 import urllib.parse
+from datetime import date
 from http import cookies
 from typing import Dict, Any, Optional, Tuple
 
@@ -29,6 +30,14 @@ jinja_env = Environment(
     loader=FileSystemLoader(TEMPLATES_DIR),
     autoescape=select_autoescape(["html", "xml"])
 )
+
+
+def weekday_cn(date_str: str) -> str:
+    return "周" + "一二三四五六日"[date.fromisoformat(date_str).weekday()]
+
+
+jinja_env.filters["weekday_cn"] = weekday_cn
+
 
 class WebHandler:
     def __init__(self, db: Database, config: AppConfig):

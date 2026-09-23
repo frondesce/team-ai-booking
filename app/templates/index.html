@@ -76,8 +76,7 @@
                     <th style="width: 140px;">时段</th>
                     {% for d in grid.dates %}
                     <th style="min-width: 220px;">
-                        {{ d }}
-                        {% if loop.index == 1 %}（今天）{% elif loop.index == 2 %}（明天）{% elif loop.index == 3 %}（后天）{% endif %}
+                        {{ d[5:] }} {{ d | weekday_cn }}
                     </th>
                     {% endfor %}
                 </tr>
