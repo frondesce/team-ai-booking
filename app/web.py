@@ -14,7 +14,9 @@ from app.models import (
     get_user_by_username, update_user_password, set_user_active,
     create_user, create_or_rotate_api_key, get_active_api_key_for_user,
     list_users, get_active_maintenance, enable_maintenance, disable_maintenance,
-    update_user_daily_slot_limit, UserExistsError
+    update_user_daily_slot_limit, UserExistsError, UserNotFoundError,
+    MIN_DAILY_SLOT_LIMIT, MAX_DAILY_SLOT_LIMIT,
+    list_booking_models, get_booking_model, update_model_slot_capacity
 )
 from app.auth import verify_password
 from app.reservation_engine import (
@@ -139,14 +141,18 @@ class WebHandler:
                     u_dict["key_masked"] = key_row["key_masked"] if key_row else None
                     users_list.append(u_dict)
 
+                active_models = [dict(m) for m in list_booking_models(conn, include_inactive=False)]
+
                 cur_res = conn.execute(
                     """
-                    SELECT r.id, r.user_id, r.date, r.slot_index, r.start_at, r.end_at,
-                           u.username, u.display_name
+                    SELECT r.id, r.user_id, r.model_id, r.date, r.slot_index, r.start_at, r.end_at,
+                           u.username, u.display_name,
+                           m.name as model_name, m.model_alias
                     FROM reservations r
                     JOIN users u ON r.user_id = u.id
+                    LEFT JOIN booking_models m ON r.model_id = m.id
                     WHERE r.status = 'confirmed' AND r.end_at > ?
-                    ORDER BY r.date ASC, r.slot_index ASC
+                    ORDER BY r.date ASC, r.slot_index ASC, r.id ASC
                     """,
                     (iso_format(now),)
                 )
@@ -156,6 +162,7 @@ class WebHandler:
                 current_user=session,
                 csrf_token=session["csrf_token"],
                 users=users_list,
+                booking_models=active_models,
                 active_maintenance=dict(active_m) if active_m else None,
                 is_maintenance=(active_m is not None),
                 active_reservations=active_reservations,
@@ -167,13 +174,24 @@ class WebHandler:
 
         # Main schedule and key page: /app or /app/
         if path in ("/app", "/app/"):
+            model_id = query.get("model_id", ["default"])[0].strip() or "default"
             now = TimeProvider.now()
             with self.db.transaction() as conn:
+                active_models = list_booking_models(conn, include_inactive=False)
+                selected_model = get_booking_model(conn, model_id)
+                if selected_model is None:
+                    http_handler.send_error_json(404, "model_not_found", f"所选模型 '{model_id}' 不存在")
+                    return
+                if not selected_model["is_active"]:
+                    http_handler.send_error_json(400, "model_inactive", f"所选模型 '{model_id}' 已停用")
+                    return
+
                 grid = get_schedule_grid(
                     conn,
                     current_user_id=session["user_id"],
                     now_dt=now,
-                    is_admin=(session["role"] == "admin")
+                    is_admin=(session["role"] == "admin"),
+                    model_id=model_id
                 )
                 api_key_row = get_active_api_key_for_user(conn, session["user_id"])
                 active_m = get_active_maintenance(conn)
@@ -185,7 +203,10 @@ class WebHandler:
                 user_api_key=dict(api_key_row) if api_key_row else None,
                 raw_api_key_once=None,
                 public_base_url=self.config.public_base_url.rstrip("/"),
-                model_alias=self.config.model_alias,
+                model_alias=selected_model["model_alias"],
+                selected_model=dict(selected_model),
+                selected_model_id=model_id,
+                booking_models=[dict(m) for m in active_models],
                 is_maintenance=(active_m is not None),
                 error_msg=error_msg,
                 success_msg=success_msg
@@ -288,23 +309,34 @@ class WebHandler:
 
         # Create reservation
         if path == "/app/reservations":
+            model_id = form_data.get("model_id", "default").strip() or "default"
             date_str = form_data.get("date", "").strip()
             slot_index_str = form_data.get("slot_index", "").strip()
+
+            with self.db.connection() as conn:
+                m = get_booking_model(conn, model_id)
+                if m is None:
+                    http_handler.send_error_json(404, "model_not_found", f"所选模型 '{model_id}' 不存在")
+                    return
+                if not m["is_active"]:
+                    http_handler.send_error_json(400, "model_inactive", f"所选模型 '{model_id}' 已停用")
+                    return
+
             try:
                 slot_index = int(slot_index_str)
             except ValueError:
                 msg = urllib.parse.quote("无效时段编号")
-                http_handler.redirect(f"/app/?error={msg}")
+                http_handler.redirect(f"/app/?model_id={urllib.parse.quote(model_id)}&error={msg}")
                 return
 
             try:
                 with self.db.transaction() as conn:
-                    create_reservation(conn, session["user_id"], date_str, slot_index, now)
-                msg = urllib.parse.quote(f"成功预约 {date_str} 第 {slot_index + 1} 时段！")
-                http_handler.redirect(f"/app/?success={msg}")
+                    create_reservation(conn, session["user_id"], date_str, slot_index, now, model_id=model_id)
+                msg = urllib.parse.quote(f"成功预约 {m['model_alias']} 在 {date_str} 第 {slot_index + 1} 时段！")
+                http_handler.redirect(f"/app/?model_id={urllib.parse.quote(model_id)}&success={msg}")
             except ReservationError as e:
                 msg = urllib.parse.quote(e.message)
-                http_handler.redirect(f"/app/?error={msg}")
+                http_handler.redirect(f"/app/?model_id={urllib.parse.quote(model_id)}&error={msg}")
             return
 
         # Cancel reservation by user: /app/reservations/{id}/cancel
@@ -318,14 +350,18 @@ class WebHandler:
                     http_handler.redirect(f"/app/?error={msg}")
                     return
 
+                target_mid = form_data.get("model_id", "").strip()
+
                 try:
                     with self.db.transaction() as conn:
                         cancel_reservation_by_user(conn, session["user_id"], res_id, now)
                     msg = urllib.parse.quote("预约已成功取消，当天资格已返还")
-                    http_handler.redirect(f"/app/?success={msg}")
+                    redirect_url = f"/app/?model_id={urllib.parse.quote(target_mid)}&success={msg}" if target_mid else f"/app/?success={msg}"
+                    http_handler.redirect(redirect_url)
                 except ReservationError as e:
                     msg = urllib.parse.quote(e.message)
-                    http_handler.redirect(f"/app/?error={msg}")
+                    redirect_url = f"/app/?model_id={urllib.parse.quote(target_mid)}&error={msg}" if target_mid else f"/app/?error={msg}"
+                    http_handler.redirect(redirect_url)
                 return
 
         # Rotate API Key: direct JSON response for in-page fetch, prohibited from caching, DB only keeps hash
@@ -383,13 +419,20 @@ class WebHandler:
                 u_name = form_data.get("username", "").strip()
                 d_name = form_data.get("display_name", "").strip()
                 pwd = form_data.get("password", "").strip()
-                limit_str = form_data.get("daily_slot_limit", "1").strip()
-                try:
-                    daily_limit = int(limit_str)
-                except ValueError:
+                limit_str = form_data.get("daily_slot_limit")
+                if limit_str is None:
                     daily_limit = 1
-                if daily_limit not in (1, 2, 3):
-                    daily_limit = 1
+                else:
+                    try:
+                        daily_limit = int(limit_str.strip())
+                    except ValueError:
+                        msg = urllib.parse.quote("每日预约额度必须为整数")
+                        http_handler.redirect(f"/app/admin?error={msg}")
+                        return
+                    if daily_limit < MIN_DAILY_SLOT_LIMIT or daily_limit > MAX_DAILY_SLOT_LIMIT:
+                        msg = urllib.parse.quote(f"每日预约额度必须为 {MIN_DAILY_SLOT_LIMIT} 至 {MAX_DAILY_SLOT_LIMIT} 之间的整数")
+                        http_handler.redirect(f"/app/admin?error={msg}")
+                        return
 
                 if not u_name or not d_name or not pwd:
                     msg = urllib.parse.quote("用户名、显示姓名和密码均不能为空")
@@ -407,6 +450,9 @@ class WebHandler:
                 except UserExistsError:
                     msg = urllib.parse.quote(f"用户名 '{u_name}' 已存在")
                     http_handler.redirect(f"/app/admin?error={msg}")
+                except ValueError as e:
+                    msg = urllib.parse.quote(str(e))
+                    http_handler.redirect(f"/app/admin?error={msg}")
                 except Exception as e:
                     msg = urllib.parse.quote(f"创建失败: {e}")
                     http_handler.redirect(f"/app/admin?error={msg}")
@@ -416,19 +462,40 @@ class WebHandler:
             if path.endswith("/slot-limit"):
                 parts = path.strip("/").split("/")
                 if len(parts) == 5 and parts[2] == "users":
-                    target_uid = int(parts[3])
                     try:
-                        new_limit = int(form_data.get("daily_slot_limit", 1))
+                        target_uid = int(parts[3])
                     except ValueError:
-                        new_limit = 1
-                    if new_limit not in (1, 2, 3):
-                        msg = urllib.parse.quote("每日预约时段数必须为 1、2 或 3")
+                        msg = urllib.parse.quote("无效的用户 ID")
                         http_handler.redirect(f"/app/admin?error={msg}")
                         return
-                    with self.db.transaction() as conn:
-                        update_user_daily_slot_limit(conn, target_uid, new_limit, now)
-                    msg = urllib.parse.quote(f"已将该用户每日可预约时段数调整为 {new_limit}")
-                    http_handler.redirect(f"/app/admin?success={msg}")
+
+                    limit_raw = form_data.get("daily_slot_limit", "").strip()
+                    try:
+                        new_limit = int(limit_raw)
+                    except ValueError:
+                        msg = urllib.parse.quote("每日预约额度必须为整数")
+                        http_handler.redirect(f"/app/admin?error={msg}")
+                        return
+
+                    if new_limit < MIN_DAILY_SLOT_LIMIT or new_limit > MAX_DAILY_SLOT_LIMIT:
+                        msg = urllib.parse.quote(f"每日预约额度必须为 {MIN_DAILY_SLOT_LIMIT} 至 {MAX_DAILY_SLOT_LIMIT} 之间的整数")
+                        http_handler.redirect(f"/app/admin?error={msg}")
+                        return
+
+                    try:
+                        with self.db.transaction() as conn:
+                            update_user_daily_slot_limit(conn, target_uid, new_limit, now)
+                        msg = urllib.parse.quote(f"已将该用户每日预约额度调整为 {new_limit}")
+                        http_handler.redirect(f"/app/admin?success={msg}")
+                    except UserNotFoundError as e:
+                        msg = urllib.parse.quote(str(e))
+                        http_handler.redirect(f"/app/admin?error={msg}")
+                    except ValueError as e:
+                        msg = urllib.parse.quote(str(e))
+                        http_handler.redirect(f"/app/admin?error={msg}")
+                    except Exception as e:
+                        msg = urllib.parse.quote(f"调整失败: {e}")
+                        http_handler.redirect(f"/app/admin?error={msg}")
                     return
 
             # Toggle user active: /app/admin/users/{id}/toggle-active
@@ -496,6 +563,34 @@ class WebHandler:
                         http_handler.redirect(f"/app/admin?success={msg}")
                     except ReservationError as e:
                         msg = urllib.parse.quote(e.message)
+                        http_handler.redirect(f"/app/admin?error={msg}")
+                    return
+
+            # Admin update model capacity: /app/admin/models/{model_id}/capacity
+            if path.startswith("/app/admin/models/") and path.endswith("/capacity"):
+                parts = path.strip("/").split("/")
+                if len(parts) == 5 and parts[2] == "models" and parts[4] == "capacity":
+                    target_mid = parts[3]
+                    cap_str = form_data.get("slot_capacity", "").strip()
+                    try:
+                        capacity = int(cap_str)
+                    except ValueError:
+                        msg = urllib.parse.quote("时段容量必须为有效整数")
+                        http_handler.redirect(f"/app/admin?error={msg}")
+                        return
+
+                    if capacity < 1:
+                        msg = urllib.parse.quote("时段容量必须大于 0")
+                        http_handler.redirect(f"/app/admin?error={msg}")
+                        return
+
+                    try:
+                        with self.db.transaction() as conn:
+                            update_model_slot_capacity(conn, session["user_id"], target_mid, capacity, now)
+                        msg = urllib.parse.quote(f"已将模型 '{target_mid}' 的时段容量调整为 {capacity}")
+                        http_handler.redirect(f"/app/admin?success={msg}")
+                    except ValueError as e:
+                        msg = urllib.parse.quote(str(e))
                         http_handler.redirect(f"/app/admin?error={msg}")
                     return
 

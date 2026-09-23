@@ -21,6 +21,16 @@ def add_audit_log(conn: sqlite3.Connection, user_id: Optional[int], action: str,
         (user_id, action, detail, iso_format(now_dt))
     )
 
+MIN_DAILY_SLOT_LIMIT = 1
+MAX_DAILY_SLOT_LIMIT = 9223372036854775807
+
+def validate_daily_slot_limit(limit: Any) -> int:
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        raise ValueError("每日预约额度必须为整数")
+    if limit < MIN_DAILY_SLOT_LIMIT or limit > MAX_DAILY_SLOT_LIMIT:
+        raise ValueError(f"每日预约额度必须为 {MIN_DAILY_SLOT_LIMIT} 至 {MAX_DAILY_SLOT_LIMIT} 之间的整数")
+    return limit
+
 def create_user(conn: sqlite3.Connection, username: str, display_name: str, password: str, role: str = "member", must_change_password: bool = False, daily_slot_limit: int = 1, now_dt: Optional[datetime.datetime] = None) -> int:
     username = username.strip()
     display_name = display_name.strip()
@@ -28,8 +38,7 @@ def create_user(conn: sqlite3.Connection, username: str, display_name: str, pass
         raise ValueError("Username, display_name and password must not be empty.")
     if role not in ("admin", "member"):
         raise ValueError("Role must be 'admin' or 'member'.")
-    if daily_slot_limit not in (1, 2, 3):
-        raise ValueError("Daily slot limit must be 1, 2, or 3.")
+    daily_slot_limit = validate_daily_slot_limit(daily_slot_limit)
     if now_dt is None:
         now_dt = TimeProvider.now()
     now_str = iso_format(now_dt)
@@ -43,15 +52,16 @@ def create_user(conn: sqlite3.Connection, username: str, display_name: str, pass
             """,
             (username, display_name, pw_hash, role, 1 if must_change_password else 0, daily_slot_limit, now_str, now_str)
         )
-        user_id = cur.lastrowid
-        add_audit_log(conn, user_id, "create_user", f"Created user {username} ({role}) with limit {daily_slot_limit}", now_dt)
-        return user_id
-    except sqlite3.IntegrityError:
-        raise UserExistsError(f"User '{username}' already exists.")
+    except sqlite3.IntegrityError as e:
+        if str(e) == "UNIQUE constraint failed: users.username":
+            raise UserExistsError(f"User '{username}' already exists.") from e
+        raise
+    user_id = cur.lastrowid
+    add_audit_log(conn, user_id, "create_user", f"Created user {username} ({role}) with limit {daily_slot_limit}", now_dt)
+    return user_id
 
 def update_user_daily_slot_limit(conn: sqlite3.Connection, user_id: int, limit: int, now_dt: Optional[datetime.datetime] = None) -> None:
-    if limit not in (1, 2, 3):
-        raise ValueError("Daily slot limit must be 1, 2, or 3.")
+    limit = validate_daily_slot_limit(limit)
     if now_dt is None:
         now_dt = TimeProvider.now()
     now_str = iso_format(now_dt)
@@ -268,3 +278,42 @@ def disable_maintenance(conn: sqlite3.Connection, admin_id: int, now_dt: Optiona
     )
     add_audit_log(conn, admin_id, "disable_maintenance", f"Maintenance ended at {now_str}", now_dt)
     return True
+
+# --- Booking Models ---
+
+def list_booking_models(conn: sqlite3.Connection, include_inactive: bool = False) -> List[sqlite3.Row]:
+    if include_inactive:
+        cur = conn.execute("SELECT * FROM booking_models ORDER BY id ASC")
+    else:
+        cur = conn.execute("SELECT * FROM booking_models WHERE is_active = 1 ORDER BY id ASC")
+    return cur.fetchall()
+
+def get_booking_model(conn: sqlite3.Connection, model_id: str) -> Optional[sqlite3.Row]:
+    cur = conn.execute("SELECT * FROM booking_models WHERE id = ?", (model_id,))
+    return cur.fetchone()
+
+def update_model_slot_capacity(conn: sqlite3.Connection, admin_id: int, model_id: str, capacity: int, now_dt: Optional[datetime.datetime] = None) -> None:
+    """Update capacity inside Database.transaction, preserving existing bookings."""
+    if isinstance(capacity, bool) or not isinstance(capacity, int):
+        raise ValueError("每时段预约人数必须为整数")
+    if capacity < 1 or capacity > 9223372036854775807:
+        raise ValueError("每时段预约人数必须为 1 至 9223372036854775807 之间的整数")
+    if not isinstance(model_id, str) or not model_id.strip():
+        raise ValueError("请选择有效模型")
+
+    model = get_booking_model(conn, model_id.strip())
+    if model is None or not model["is_active"]:
+        raise ValueError("所选模型不存在或已停用")
+
+    old_capacity = model["slot_capacity"]
+    conn.execute(
+        "UPDATE booking_models SET slot_capacity = ? WHERE id = ?",
+        (capacity, model_id.strip())
+    )
+    add_audit_log(
+        conn,
+        admin_id,
+        "update_model_slot_capacity",
+        f"Model {model_id.strip()} slot_capacity updated from {old_capacity} to {capacity}",
+        now_dt
+    )

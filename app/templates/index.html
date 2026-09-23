@@ -23,8 +23,8 @@
                 </button>
             </div>
             <p style="font-size: 0.8125rem; color: var(--gray-600); margin-top: 0.5rem;">
-                <strong>您的每日预约额度：</strong>{{ current_user.daily_slot_limit }} 个时段/天（每段 1 小时，可连续或分散）。<br>
-                注：每个账号仅持有一个有效 Key。重置 Key 不影响已有预约与当天额度。
+                <strong>您的每日预约额度：</strong> {{ current_user.daily_slot_limit }} 次/天。<br>
+                注：重置 Key 不影响已有预约与当天额度。
             </p>
         </div>
 
@@ -32,9 +32,9 @@
             <div style="margin-bottom: 0.75rem;">
                 <strong>API Base URL:</strong> <code>{{ public_base_url }}/v1</code>
             </div>
-            <div style="margin-bottom: 0.75rem;">
-                <strong>模型名称 (Model Alias):</strong> <code>{{ model_alias }}</code>
-            </div>
+            <p style="font-size: 0.8125rem; color: var(--gray-600); margin-bottom: 0.75rem;">
+                客户端中模型名称请填写下方选择的预约模型名称。
+            </p>
             <details style="font-size: 0.875rem;">
                 <summary style="cursor: pointer; color: var(--primary); font-weight: 500;">查看 curl 调用示例</summary>
                 <pre style="margin-top: 0.5rem;">curl -X POST {{ public_base_url }}/v1/chat/completions \
@@ -50,18 +50,30 @@
     </div>
 </div>
 
+<!-- 模型选择栏 -->
+<div class="card" style="margin-bottom: 1.5rem;">
+    <div style="display: flex; align-items: center; gap: 0.75rem;">
+        <label for="modelSelect" style="font-weight: 600; margin: 0; font-size: 0.95rem;">预约模型：</label>
+        <select id="modelSelect" style="height: 38px; border: 1px solid var(--gray-300); border-radius: 0.375rem; padding: 0 0.75rem; font-size: 0.9rem; font-weight: 500; background: #fff;" onchange="location.href='/app/?model_id=' + encodeURIComponent(this.value)">
+            {% for m in booking_models %}
+            <option value="{{ m.id }}" {% if m.id == selected_model_id %}selected{% endif %}>{{ m.model_alias }}</option>
+            {% endfor %}
+        </select>
+    </div>
+</div>
+
 <!-- 预约表格 -->
 <div class="card">
     <div class="card-title">
-        <span>三天预约时间表（服务器当前时间：{{ grid.now_formatted }}）</span>
-        <a href="/app/" class="btn btn-secondary btn-sm">刷新状态</a>
+        <span>预约时间表（服务器当前时间：{{ grid.now_formatted }}）</span>
+        <a href="/app/?model_id={{ selected_model_id }}" class="btn btn-secondary btn-sm">刷新状态</a>
     </div>
     
     <div style="overflow-x: auto;">
         <table>
             <thead>
                 <tr>
-                    <th style="width: 140px;">时段（固定9时段）</th>
+                    <th style="width: 140px;">时段</th>
                     {% for d in grid.dates %}
                     <th style="min-width: 220px;">
                         {{ d }}
@@ -76,45 +88,61 @@
                     <td style="font-weight: 600; background: #f9fafb;">{{ row.label }}</td>
                     {% for cell in row.cells %}
                     <td>
-                        {% if cell.reservation %}
-                            <div style="margin-bottom: 0.4rem;">
-                                {% if cell.reservation.is_mine %}
-                                    <span class="badge badge-primary">已由您预约</span>
-                                {% elif current_user.role == 'admin' and cell.reservation.display_name %}
-                                    <span class="badge badge-gray">已由 {{ cell.reservation.display_name }} 预约</span>
-                                {% else %}
-                                    <span class="badge badge-gray">已被预约</span>
-                                {% endif %}
+                        {% if cell.own %}
+                            <div style="margin-bottom: 0.35rem;">
+                                <span class="badge badge-primary">您已预约</span>
                                 {% if cell.is_running %}
-                                    <span class="badge badge-success">生效中</span>
+                                    <span class="badge badge-success">已开始</span>
+                                {% elif cell.is_past %}
+                                    <span class="badge badge-gray">已结束</span>
                                 {% endif %}
                             </div>
-
-                            {% if cell.reservation.can_cancel %}
-                            <form action="/app/reservations/{{ cell.reservation.id }}/cancel" method="POST" onsubmit="return confirm('确定取消该预约并返还当天预约资格吗？');">
+                            {% if cell.own.can_cancel %}
+                            <form action="/app/reservations/{{ cell.own.id }}/cancel" method="POST" onsubmit="return confirm('确定取消该预约并返还当天预约资格吗？');" style="margin-top: 0.25rem;">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <input type="hidden" name="model_id" value="{{ selected_model_id }}">
                                 <button type="submit" class="btn btn-danger btn-sm">取消预约</button>
                             </form>
-                            {% elif cell.reservation.is_mine and (cell.is_running or cell.is_past) %}
-                                <span style="font-size: 0.75rem; color: var(--gray-600);">不可取消</span>
+                            {% elif cell.is_running or cell.is_past %}
+                                <span style="font-size: 0.75rem; color: var(--gray-600); display: block; margin-top: 0.2rem;">不可取消</span>
                             {% endif %}
                         {% elif cell.is_past %}
-                            <span class="badge badge-gray">已结束</span>
+                            <span class="badge badge-gray" style="margin-top: 0.25rem; display: inline-block;">已结束</span>
                         {% elif cell.is_running %}
-                            <span class="badge badge-gray">已开始未预约</span>
+                            <span class="badge badge-gray" style="margin-top: 0.25rem; display: inline-block;">已开始未预约</span>
                         {% elif is_maintenance %}
-                            <span class="badge badge-danger">系统维护</span>
+                            <span class="badge badge-danger" style="margin-top: 0.25rem; display: inline-block;">系统维护</span>
                         {% elif cell.can_reserve %}
-                            <form action="/app/reservations" method="POST">
+                            <form action="/app/reservations" method="POST" style="margin-top: 0.25rem;">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <input type="hidden" name="model_id" value="{{ selected_model_id }}">
                                 <input type="hidden" name="date" value="{{ cell.date }}">
                                 <input type="hidden" name="slot_index" value="{{ cell.slot_index }}">
-                                <button type="submit" class="btn btn-primary btn-sm">预约此段</button>
+                                <button type="submit" class="btn btn-primary btn-sm">预约</button>
                             </form>
+                        {% elif cell.full and cell.is_future %}
+                            <span class="badge badge-gray" style="margin-top: 0.25rem; display: inline-block;">已约满</span>
                         {% elif cell.quota_reached and cell.is_future %}
-                            <button type="button" class="btn btn-secondary btn-sm" disabled>额度已满</button>
+                            <button type="button" class="btn btn-secondary btn-sm" disabled style="margin-top: 0.25rem;">额度已满</button>
                         {% else %}
-                            <span class="badge badge-gray">不可预约</span>
+                            <span class="badge badge-gray" style="margin-top: 0.25rem; display: inline-block;">不可预约</span>
+                        {% endif %}
+
+                        {% if current_user.role == 'admin' and cell.reservations %}
+                        <div style="font-size: 0.75rem; background: var(--gray-100); padding: 0.35rem; border-radius: 0.25rem; margin-top: 0.4rem;">
+                            <div style="font-weight: 600; color: var(--gray-700); margin-bottom: 0.2rem;">预约成员 ({{ cell.reservations|length }}):</div>
+                            {% for occ in cell.reservations %}
+                            <div style="display: flex; align-items: center; justify-content: space-between; gap: 0.25rem; margin-bottom: 0.15rem;">
+                                <span title="{{ occ.username }}">{{ occ.display_name }}</span>
+                                {% if occ.admin_can_cancel and occ.id %}
+                                <form action="/app/admin/reservations/{{ occ.id }}/cancel" method="POST" onsubmit="return confirm('确定作废这笔预约吗？');" style="display: inline;">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <button type="submit" class="btn btn-danger btn-sm" style="padding: 0.05rem 0.3rem; font-size: 0.65rem;">作废</button>
+                                </form>
+                                {% endif %}
+                            </div>
+                            {% endfor %}
+                        </div>
                         {% endif %}
                     </td>
                     {% endfor %}
@@ -126,9 +154,9 @@
 
     <div style="margin-top: 1rem; font-size: 0.8125rem; color: var(--gray-600); line-height: 1.6;">
         <strong>预约规则提示：</strong><br>
-        1. 每天开放 09:30–18:30 共 9 个时段；仅可预约尚未开始的完整时段。<br>
-        2. 每名成员每天可预约时段数由管理员配置（默认 1，可设为 1、2 或 3 段），允许连续或分散预约；若取消未开始的预约，可返还当天对应额度。<br>
-        3. 时段一旦到达开始时间即不可自行取消，自然结束后仍占用当天资格。系统维护期间推理及预约暂停。
+        1. 可以在同时段预约不同模型，每个模型各占一次额度。<br>
+        2. 取消未开始的预约会返还对应额度，时段一旦到达开始时间即不可自行取消。<br>
+        3. 系统维护期间预约及调用暂停。
     </div>
 </div>
 

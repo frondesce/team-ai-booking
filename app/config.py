@@ -1,8 +1,9 @@
 # Configuration module for team-ai-booking
 import os
 import json
+import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List, Dict
 
 @dataclass
 class AppConfig:
@@ -14,10 +15,41 @@ class AppConfig:
     backend_key: Optional[str] = None
     public_base_url: str = "http://127.0.0.1:8000"
     model_alias: str = "your-model"
+    booking_models: Optional[List[Dict[str, str]]] = None
     session_lifetime_hours: int = 12
     cookie_secure: bool = False # Set True in production with HTTPS
     connect_timeout: float = 5.0
     read_timeout: Optional[float] = None # None for infinite streaming
+
+    def get_booking_models(self) -> List[Dict[str, str]]:
+        """Return the configured model inventory, preserving legacy reservations."""
+        models = self.booking_models
+        if models is None:
+            models = [{"id": "default", "name": self.model_alias, "model_alias": self.model_alias}]
+        if not isinstance(models, list) or not models:
+            raise ValueError("booking_models must be a non-empty list")
+        result = []
+        ids = set()
+        aliases = set()
+        for model in models:
+            if not isinstance(model, dict):
+                raise ValueError("Each booking model must be an object")
+            model_id = model.get("id")
+            alias = model.get("model_alias")
+            name = model.get("name", alias)
+            if not isinstance(model_id, str) or not re.fullmatch(r"[a-zA-Z0-9_-]{1,64}", model_id):
+                raise ValueError("Booking model id must contain 1–64 letters, digits, underscores or hyphens")
+            if not isinstance(alias, str) or not alias.strip() or not isinstance(name, str) or not name.strip():
+                raise ValueError("Booking model name and model_alias must be non-empty strings")
+            alias, name = alias.strip(), name.strip()
+            if model_id in ids or alias in aliases:
+                raise ValueError("Booking model ids and model_alias values must be unique")
+            ids.add(model_id)
+            aliases.add(alias)
+            result.append({"id": model_id, "name": name, "model_alias": alias})
+        if "default" not in ids:
+            raise ValueError("Keep a booking model with id 'default' for existing reservations")
+        return result
 
     @classmethod
     def load(cls, config_file: Optional[str] = None) -> "AppConfig":
@@ -46,5 +78,6 @@ class AppConfig:
         if "LLAMA_COOKIE_SECURE" in os.environ:
             cfg.cookie_secure = os.environ["LLAMA_COOKIE_SECURE"].lower() in ("1", "true", "yes")
 
+        cfg.get_booking_models()
         os.makedirs(cfg.data_dir, exist_ok=True)
         return cfg

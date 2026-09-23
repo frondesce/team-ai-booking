@@ -2,6 +2,7 @@ import sys
 import time
 import uuid
 import logging
+import json
 import requests
 from typing import Dict, Any, Optional, Tuple
 from requests.adapters import HTTPAdapter
@@ -37,6 +38,7 @@ class ProxyHandler:
     def __init__(self, db: Database, config: AppConfig):
         self.db = db
         self.config = config
+        self.booking_models = {model["model_alias"]: model for model in config.get_booking_models()}
         
         # Create session with ZERO retries to avoid duplicating inference requests
         # and trust_env=False to avoid proxying local/internal calls through environment proxies
@@ -49,7 +51,7 @@ class ProxyHandler:
     def is_allowed_path(self, path: str) -> bool:
         return path in ALLOWED_PROXY_PATHS
 
-    def authenticate_and_authorize(self, auth_header: Optional[str], path: str) -> Tuple[Optional[int], Optional[Dict[str, Any]]]:
+    def authenticate_and_authorize(self, auth_header: Optional[str], path: str, model_id: str = "default") -> Tuple[Optional[int], Optional[Dict[str, Any]]]:
         """
         Returns (user_id, error_dict)
         error_dict: {"status": int, "code": str, "message": str} or None if authorized.
@@ -82,9 +84,9 @@ class ProxyHandler:
                     return user_id, {"status": 503, "code": "system_maintenance", "message": "系统维护"}
 
                 # 3. Check Active Reservation
-                reservation = check_active_reservation_for_user(conn, user_id, now)
+                reservation = check_active_reservation_for_user(conn, user_id, now, model_id=model_id)
                 if reservation is None:
-                    return user_id, {"status": 403, "code": "reservation_required", "message": "当前时段无有效预约"}
+                    return user_id, {"status": 403, "code": "reservation_required", "message": "当前时段没有该模型的有效预约"}
 
                 # Admission granted!
                 return user_id, None
@@ -156,8 +158,31 @@ class ProxyHandler:
             http_handler.send_error_json(404, "not_found", "未受支持的推理入口")
             return
 
+        # Resolve the model before checking its reservation. Re-encode the parsed
+        # object so authorization and the gateway see the same model value.
+        try:
+            payload = json.loads(body_bytes)
+        except (ValueError, UnicodeDecodeError):
+            http_handler.send_error_json(400, "invalid_request", "请求体必须为有效 JSON 对象")
+            return
+        if not isinstance(payload, dict):
+            http_handler.send_error_json(400, "invalid_request", "请求体必须为 JSON 对象")
+            return
+        if "model" not in payload and len(self.booking_models) == 1:
+            payload["model"] = next(iter(self.booking_models))
+        alias = payload.get("model")
+        if not isinstance(alias, str) or alias not in self.booking_models:
+            http_handler.send_error_json(400, "invalid_model", "请在 model 字段填写已配置的模型名称")
+            return
+        model_id = self.booking_models[alias]["id"]
+        try:
+            body_bytes = json.dumps(payload, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        except (ValueError, UnicodeError):
+            http_handler.send_error_json(400, "invalid_request", "请求体包含无效的 JSON 值")
+            return
+
         auth_header = http_handler.headers.get("Authorization")
-        user_id, auth_err = self.authenticate_and_authorize(auth_header, path)
+        user_id, auth_err = self.authenticate_and_authorize(auth_header, path, model_id=model_id)
 
         if auth_err:
             elapsed = time.time() - start_time
@@ -171,9 +196,10 @@ class ProxyHandler:
             k_lower = k.lower()
             if k_lower in HOP_BY_HOP_HEADERS:
                 continue
-            if k_lower in ("authorization", "cookie", "host", "x-forwarded-for", "x-forwarded-proto"):
+            if k_lower in ("authorization", "cookie", "host", "x-forwarded-for", "x-forwarded-proto", "content-length", "content-type"):
                 continue
             backend_headers[k] = v
+        backend_headers["Content-Type"] = "application/json"
 
         if self.config.backend_key:
             backend_headers["Authorization"] = f"Bearer {self.config.backend_key}"

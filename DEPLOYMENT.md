@@ -14,6 +14,7 @@
 | `backend_key` | 后端凭据，建议使用环境变量 `LLAMA_BACKEND_KEY` 提供 |
 | `public_base_url` | 成员访问地址，例如 `https://ai.example.com`，不包含 `/v1` |
 | `model_alias` | 后端接受的模型名，供客户端填写 |
+| `booking_models` | 可选模型列表，每项包含稳定 `id`、显示 `name`、后端 `model_alias`；省略或设为 `null` 时使用原有单模型配置 |
 | `session_lifetime_hours` | 网页会话有效期，默认 12 小时 |
 | `cookie_secure` | HTTPS 部署设为 `true`；本机 HTTP 调试使用 `false` |
 | `connect_timeout` / `read_timeout` | 后端连接/读取超时；长流式响应默认 `read_timeout: null` |
@@ -21,6 +22,16 @@
 也支持 `LLAMA_PROXY_HOST`、`LLAMA_PROXY_PORT`、`LLAMA_PROXY_DATA_DIR`、`LLAMA_PROXY_DB_PATH`、`LLAMA_BACKEND_URL`、`LLAMA_PUBLIC_BASE_URL`、`LLAMA_MODEL_ALIAS`、`LLAMA_SESSION_LIFETIME_HOURS` 和 `LLAMA_COOKIE_SECURE`，环境变量优先于配置。`LLAMA_*` 命名保留用于配置兼容。
 
 配置文件和数据目录只允许运行用户及必要的管理员访问，不提交到版本控制。
+
+### 按模型设置预约容量
+
+模型列表示例见 [README.zh-CN.md](README.zh-CN.md#多模型与预约人数)。配置列表时，`model_alias` 全局设置只用于旧版单模型模式；每项的别名须唯一，`id` 使用 1–64 位英文字母、数字、下划线或连字符。保留 `id: default` 并将其用于原有模型，旧预约自动归属该模型。更改模型列表后重启服务；保持已有模型 ID 稳定。
+
+登录 `/app/admin`，分别设置每个模型的每时段预约人数，默认 1，须为正整数。容量保存在数据库，重启不会重置，保存后立即生效。调低容量保留已有预约，达到或超过上限时停止新增。同一人可以同时预约不同模型，每个模型各消耗一次跨模型共用的每日额度。
+
+多个模型共用 `backend_url` 和 `LLAMA_BACKEND_KEY`，由网关负责路由和实例分配。例如提供两个 Model A 实例时，可在网关下配置同一 Model A 别名，并在预约后台将该模型容量设为 2；Model B 使用另一个别名和独立容量。此应用按请求体的 `model` 校验对应预约，不保证实例独占、会话粘性或推理并发上限。配置多个模型后，`/completion` 等接口也必须携带 `model`。
+
+升级前按下文备份数据库。首次启动自动迁移数据库，包括将旧版成员每日额度约束升级为正整数额度、迁移预约模型和唯一约束，保留原有数据。移除 `default` 之外的模型配置并重启后，程序在同一事务中停用该模型并取消它所有尚未结束（含进行中与未来）的有效预约，返还对应每日额度并记录取消原因和审计日志。停用模型不再接受新预约和 API 请求；已结束的预约保留且仍计入当天额度。重复启动不会重复取消或重复记录审计日志。重新加入相同模型 ID 会保留原时段容量，但不会恢复已取消的预约。回退旧程序时须恢复匹配的升级前数据库备份，不能直接使用已产生多人预约的新数据库。
 
 ## 常驻服务示例
 

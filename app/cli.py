@@ -94,7 +94,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config = AppConfig.load(args.config)
-    db = Database(config.db_path)
+    db = Database(config.db_path, booking_models=config.get_booking_models())
 
     if args.command == "create-admin":
         code = prompt_create_admin(db, args.username, args.display_name, args.password)

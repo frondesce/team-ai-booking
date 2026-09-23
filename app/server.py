@@ -122,7 +122,7 @@ def make_request_handler(db: Database, config: AppConfig):
     return AppRequestHandler
 
 def create_server(config: AppConfig) -> ThreadedHTTPServer:
-    db = Database(config.db_path)
+    db = Database(config.db_path, booking_models=config.get_booking_models())
     handler_class = make_request_handler(db, config)
     server = ThreadedHTTPServer((config.host, config.port), handler_class)
     return server

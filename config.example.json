@@ -6,6 +6,7 @@
   "backend_key": null,
   "public_base_url": "http://127.0.0.1:8000",
   "model_alias": "your-model",
+  "booking_models": null,
   "session_lifetime_hours": 12,
   "cookie_secure": false,
   "connect_timeout": 5.0,
