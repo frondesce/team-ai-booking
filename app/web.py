@@ -17,7 +17,8 @@ from app.models import (
     list_users, get_active_maintenance, enable_maintenance, disable_maintenance,
     update_user_daily_slot_limit, UserExistsError, UserNotFoundError,
     MIN_DAILY_SLOT_LIMIT, MAX_DAILY_SLOT_LIMIT,
-    list_booking_models, get_booking_model, update_model_slot_capacity
+    list_booking_models, get_booking_model, update_model_slot_capacity,
+    get_time_slot_config, get_slot_definitions, update_time_slot_config
 )
 from app.auth import verify_password
 from app.reservation_engine import (
@@ -166,12 +167,20 @@ class WebHandler:
                     (iso_format(now),)
                 )
                 active_reservations = [dict(r) for r in cur_res.fetchall()]
+                slot_start_time, slot_end_time = get_time_slot_config(conn)
+                slot_definitions = get_slot_definitions(conn)
+                time_slot_config = {
+                    "start_time": slot_start_time,
+                    "end_time": slot_end_time,
+                    "slots": slot_definitions,
+                }
 
             html = jinja_env.get_template("admin.html").render(
                 current_user=session,
                 csrf_token=session["csrf_token"],
                 users=users_list,
                 booking_models=active_models,
+                time_slot_config=time_slot_config,
                 active_maintenance=dict(active_m) if active_m else None,
                 is_maintenance=(active_m is not None),
                 active_reservations=active_reservations,
@@ -323,6 +332,12 @@ class WebHandler:
             model_id = form_data.get("model_id", "").strip()
             date_str = form_data.get("date", "").strip()
             slot_index_str = form_data.get("slot_index", "").strip()
+            expected_start_time = form_data.get("expected_start_time", "").strip() or form_data.get("start_time", "").strip()
+
+            if not expected_start_time:
+                msg = urllib.parse.quote("页面已过期，请刷新页面后重新预约")
+                http_handler.redirect(f"/app/?model_id={urllib.parse.quote(model_id)}&error={msg}")
+                return
 
             with self.db.connection() as conn:
                 m = get_booking_model(conn, model_id)
@@ -342,8 +357,13 @@ class WebHandler:
 
             try:
                 with self.db.transaction() as conn:
-                    create_reservation(conn, session["user_id"], date_str, slot_index, now, model_id=model_id)
-                start_dt, end_dt = get_slot_times(date_str, slot_index)
+                    create_reservation(
+                        conn, session["user_id"], date_str, slot_index, now,
+                        model_id=model_id,
+                        expected_start_time=expected_start_time
+                    )
+                    slot_defs = get_slot_definitions(conn)
+                start_dt, end_dt = get_slot_times(date_str, slot_index, slot_defs)
                 if start_dt <= now < end_dt:
                     msg = urllib.parse.quote(f"已成功开通 {m['model_name']} 当前时段（不消耗每日额度），可立即使用！")
                 else:
@@ -608,5 +628,35 @@ class WebHandler:
                         msg = urllib.parse.quote(str(e))
                         http_handler.redirect(f"/app/admin?error={msg}")
                     return
+
+            # Admin update time slots: /app/admin/time-slots
+            if path == "/app/admin/time-slots":
+                start_time = form_data.get("start_time", "").strip()
+                end_time = form_data.get("end_time", "").strip()
+                if not start_time or not end_time:
+                    msg = urllib.parse.quote("开始时间和结束时间均不能为空")
+                    http_handler.redirect(f"/app/admin?error={msg}")
+                    return
+
+                try:
+                    with self.db.transaction() as conn:
+                        res = update_time_slot_config(conn, session["user_id"], start_time, end_time, now)
+                    if not res["changed"]:
+                        msg = urllib.parse.quote("可预约时段未发生变更")
+                    elif res["cancelled_count"] > 0:
+                        msg = urllib.parse.quote(
+                            f"已将每日可预约时段更新为 {start_time} 至 {end_time}（共 {res['slot_count']} 个时段），"
+                            f"已自动取消 {res['cancelled_count']} 笔受影响的未结束预约并返还额度"
+                        )
+                    else:
+                        msg = urllib.parse.quote(f"已将每日可预约时段更新为 {start_time} 至 {end_time}（共 {res['slot_count']} 个时段）")
+                    http_handler.redirect(f"/app/admin?success={msg}")
+                except ValueError as e:
+                    msg = urllib.parse.quote(str(e))
+                    http_handler.redirect(f"/app/admin?error={msg}")
+                except Exception as e:
+                    msg = urllib.parse.quote(f"时段配置更新失败: {e}")
+                    http_handler.redirect(f"/app/admin?error={msg}")
+                return
 
         http_handler.send_error_json(404, "not_found", "未受支持的操作")

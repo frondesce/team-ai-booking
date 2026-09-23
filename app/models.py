@@ -317,3 +317,119 @@ def update_model_slot_capacity(conn: sqlite3.Connection, admin_id: int, model_id
         f"Model {model_id.strip()} slot_capacity updated from {old_capacity} to {capacity}",
         now_dt
     )
+
+
+# --- Time Slot Configuration ---
+
+def get_time_slot_config(conn: sqlite3.Connection) -> Tuple[str, str]:
+    """Return (slot_start_time, slot_end_time) from system_settings."""
+    cur = conn.execute("SELECT key, value FROM system_settings WHERE key IN ('slot_start_time', 'slot_end_time')")
+    m = {r["key"]: r["value"] for r in cur.fetchall()}
+    start_t = m.get("slot_start_time", "09:30")
+    end_t = m.get("slot_end_time", "18:30")
+    return start_t, end_t
+
+
+def get_slot_definitions(conn: sqlite3.Connection) -> List[Tuple[int, int, int, int]]:
+    """Return configured slot definitions list of (sh, sm, eh, em)."""
+    from app.time_utils import generate_slot_definitions
+    start_t, end_t = get_time_slot_config(conn)
+    return generate_slot_definitions(start_t, end_t)
+
+
+def update_time_slot_config(
+    conn: sqlite3.Connection,
+    admin_id: int,
+    start_time: str,
+    end_time: str,
+    now_dt: Optional[datetime.datetime] = None
+) -> Dict[str, Any]:
+    """
+    Updates the daily available booking time slots (start_time, end_time).
+    Validates that each slot is 1 hour.
+    Only cancels unended confirmed reservations that do NOT match the new time slots.
+    Preserves reservations matching new time slots (and updates their slot_index).
+    Records audit log and updates TimeSlotManager.
+    Must be called within a Database.transaction block.
+    """
+    from app.time_utils import (
+        validate_time_slot_range, generate_slot_definitions,
+        TimeSlotManager, parse_iso
+    )
+    if now_dt is None:
+        now_dt = TimeProvider.now()
+    now_str = iso_format(now_dt)
+
+    start_time, end_time = validate_time_slot_range(start_time, end_time)
+    new_slots = generate_slot_definitions(start_time, end_time)
+
+    old_start, old_end = get_time_slot_config(conn)
+    if start_time == old_start and end_time == old_end:
+        return {"changed": False, "cancelled_count": 0, "slot_count": len(new_slots)}
+
+    # Save to system_settings
+    conn.execute(
+        """
+        INSERT INTO system_settings (key, value) VALUES ('slot_start_time', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (start_time,)
+    )
+    conn.execute(
+        """
+        INSERT INTO system_settings (key, value) VALUES ('slot_end_time', ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (end_time,)
+    )
+
+    # Check unended confirmed reservations: end_at > now
+    cur = conn.execute(
+        """
+        SELECT id, user_id, model_id, date, slot_index, start_at, end_at
+        FROM reservations
+        WHERE status = 'confirmed' AND end_at > ?
+        """,
+        (now_str,)
+    )
+    unended_reservations = cur.fetchall()
+
+    cancelled_count = 0
+    new_slot_map = {slot_tuple: idx for idx, slot_tuple in enumerate(new_slots)}
+
+    for r in unended_reservations:
+        s_dt = parse_iso(r["start_at"])
+        e_dt = parse_iso(r["end_at"])
+        sh, sm = s_dt.hour, s_dt.minute
+        eh, em = (24, e_dt.minute) if e_dt.date() > s_dt.date() else (e_dt.hour, e_dt.minute)
+        slot_key = (sh, sm, eh, em)
+
+        if slot_key in new_slot_map:
+            new_idx = new_slot_map[slot_key]
+            if new_idx != r["slot_index"]:
+                conn.execute("UPDATE reservations SET slot_index = ? WHERE id = ?", (new_idx, r["id"]))
+        else:
+            conn.execute(
+                """
+                UPDATE reservations
+                SET status = 'admin_cancelled', cancelled_at = ?, cancel_reason = '时段配置变更'
+                WHERE id = ?
+                """,
+                (now_str, r["id"])
+            )
+            add_audit_log(
+                conn, admin_id, "time_slot_cancel",
+                f"Reservation {r['id']} for model {r['model_id']} on {r['date']} ({sh:02d}:{sm:02d}-{eh:02d}:{em:02d}) cancelled due to time slot change to {start_time}-{end_time}",
+                now_dt
+            )
+            cancelled_count += 1
+
+    add_audit_log(
+        conn, admin_id, "update_time_slots",
+        f"Time slots updated from {old_start}-{old_end} to {start_time}-{end_time} ({len(new_slots)} slots, cancelled {cancelled_count} reservations)",
+        now_dt
+    )
+
+    TimeSlotManager.set_config(start_time, end_time)
+
+    return {"changed": True, "cancelled_count": cancelled_count, "slot_count": len(new_slots)}

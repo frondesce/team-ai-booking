@@ -5,7 +5,7 @@ from app.time_utils import (
     TimeProvider, get_available_dates, get_slot_times,
     get_slot_label, iso_format, parse_iso, SLOT_DEFINITIONS
 )
-from app.models import get_active_maintenance, add_audit_log, get_booking_model
+from app.models import get_active_maintenance, add_audit_log, get_booking_model, get_slot_definitions
 
 class ReservationError(Exception):
     def __init__(self, code: str, message: str, status_code: int = 409):
@@ -91,24 +91,35 @@ def reconcile_maintenance(conn: sqlite3.Connection, now_dt: Optional[datetime.da
     return invalidated_count
 
 
-def create_reservation(conn: sqlite3.Connection, user_id: int, date_str: str, slot_index: int, now_dt: Optional[datetime.datetime] = None, *, model_id: str) -> int:
+def create_reservation(
+    conn: sqlite3.Connection,
+    user_id: int,
+    date_str: str,
+    slot_index: int,
+    now_dt: Optional[datetime.datetime] = None,
+    *,
+    model_id: str,
+    expected_start_time: Optional[str] = None
+) -> int:
     """
     Creates a new reservation with strict checks:
     - Reconcile maintenance first
     - System cannot be under maintenance
     - Model must exist and be active
     - date must be one of today, tomorrow, day after tomorrow
-    - slot_index must be 0..8
-    - now < start_at (must be full unstarted slot)
+    - slot_index must be valid for configured slots
+    - expected_start_time (if provided) must match the slot's actual start time
+    - now < start_at (must be full unstarted slot or running slot)
     - user daily quota across all models not exceeded
-    - user has no confirmed reservation for the same model, date and slot
-    - model occupancy for this slot has not reached its slot_capacity
+    - user has no confirmed reservation for the same model and start_at
+    - model occupancy for this start_at has not reached its slot_capacity
 
     NOTE: Caller must run this within a Database.transaction (BEGIN IMMEDIATE)
     serialization block to prevent race conditions.
     """
     if now_dt is None:
         now_dt = TimeProvider.now()
+    now_str = iso_format(now_dt)
 
     reconcile_maintenance(conn, now_dt)
 
@@ -124,10 +135,21 @@ def create_reservation(conn: sqlite3.Connection, user_id: int, date_str: str, sl
     if date_str not in avail_dates:
         raise ReservationError("invalid_date", f"日期 {date_str} 不在可预约窗口（今天、明天、后天）内", 400)
 
-    if slot_index < 0 or slot_index >= len(SLOT_DEFINITIONS):
+    slot_definitions = get_slot_definitions(conn)
+    if slot_index < 0 or slot_index >= len(slot_definitions):
         raise ReservationError("invalid_slot", f"无效时段编号: {slot_index}", 400)
 
-    start_dt, end_dt = get_slot_times(date_str, slot_index)
+    start_dt, end_dt = get_slot_times(date_str, slot_index, slot_definitions)
+    if expected_start_time is not None:
+        actual_hm = start_dt.strftime("%H:%M")
+        exp_hm = expected_start_time.strip()
+        if not exp_hm or exp_hm != actual_hm:
+            raise ReservationError(
+                "slot_changed",
+                f"可预约时段配置已发生变动（当前该时段为 {actual_hm}），请刷新页面后重新预约",
+                409
+            )
+
     if now_dt >= end_dt:
         raise ReservationError("slot_ended", "该时段已结束，无法预约", 409)
 
@@ -148,11 +170,14 @@ def create_reservation(conn: sqlite3.Connection, user_id: int, date_str: str, sl
         if active_count >= daily_limit:
             raise ReservationError("daily_quota_exceeded", f"您在 {date_str} 的预约已达每日上限（跨模型共 {daily_limit} 次）", 409)
 
+    start_str = iso_format(start_dt)
+    end_str = iso_format(end_dt)
+
     # One user may book different models at once, but cannot occupy two seats
     # for the same model and time.
     cur_user_slot = conn.execute(
-        "SELECT id FROM reservations WHERE user_id = ? AND model_id = ? AND date = ? AND slot_index = ? AND status = 'confirmed'",
-        (user_id, model_id, date_str, slot_index)
+        "SELECT id FROM reservations WHERE user_id = ? AND model_id = ? AND start_at = ? AND status = 'confirmed'",
+        (user_id, model_id, start_str)
     )
     existing_user_slot = cur_user_slot.fetchone()
     if existing_user_slot is not None:
@@ -161,16 +186,12 @@ def create_reservation(conn: sqlite3.Connection, user_id: int, date_str: str, sl
     # Check capacity for selected model on this date and slot
     slot_capacity = model["slot_capacity"]
     cur_slot_count = conn.execute(
-        "SELECT COUNT(*) as count FROM reservations WHERE model_id = ? AND date = ? AND slot_index = ? AND status = 'confirmed'",
-        (model_id, date_str, slot_index)
+        "SELECT COUNT(*) as count FROM reservations WHERE model_id = ? AND start_at = ? AND status = 'confirmed'",
+        (model_id, start_str)
     )
     current_occupants = cur_slot_count.fetchone()["count"]
     if current_occupants >= slot_capacity:
         raise ReservationError("slot_full", f"该模型在所选时段的预约名额已满（容量上限 {slot_capacity} 人）", 409)
-
-    now_str = iso_format(now_dt)
-    start_str = iso_format(start_dt)
-    end_str = iso_format(end_dt)
 
     try:
         cur = conn.execute(
@@ -331,25 +352,27 @@ def get_schedule_grid(conn: sqlite3.Connection, current_user_id: Optional[int] =
         """,
         [model_id] + dates
     )
-    model_res_by_slot: Dict[Tuple[str, int], List[sqlite3.Row]] = {}
+    model_res_by_start: Dict[str, List[sqlite3.Row]] = {}
     for row in cur_model_res.fetchall():
-        key = (row["date"], row["slot_index"])
-        if key not in model_res_by_slot:
-            model_res_by_slot[key] = []
-        model_res_by_slot[key].append(row)
+        key = row["start_at"]
+        if key not in model_res_by_start:
+            model_res_by_start[key] = []
+        model_res_by_start[key].append(row)
 
+    slot_definitions = get_slot_definitions(conn)
     rows = []
-    for slot_idx in range(len(SLOT_DEFINITIONS)):
-        slot_label = get_slot_label(slot_idx)
+    for slot_idx in range(len(slot_definitions)):
+        slot_label = get_slot_label(slot_idx, slot_definitions)
         slot_cells = []
         for d in dates:
-            start_dt, end_dt = get_slot_times(d, slot_idx)
+            start_dt, end_dt = get_slot_times(d, slot_idx, slot_definitions)
+            start_str = iso_format(start_dt)
             is_past = (now_dt >= end_dt)
             is_running = (start_dt <= now_dt < end_dt)
             is_future = (now_dt < start_dt)
             quota_reached = (current_user_id is not None and user_counts_by_date.get(d, 0) >= user_daily_limit)
 
-            res_list = model_res_by_slot.get((d, slot_idx), [])
+            res_list = model_res_by_start.get(start_str, [])
             count = len(res_list)
             remaining = max(0, capacity - count)
             full = (count >= capacity)
@@ -441,6 +464,7 @@ def get_schedule_grid(conn: sqlite3.Connection, current_user_id: Optional[int] =
         "model": dict(model) if model else None,
         "capacity": capacity,
         "is_model_active": is_model_active,
+        "slot_count": len(slot_definitions),
     }
 
 

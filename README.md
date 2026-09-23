@@ -14,7 +14,7 @@ Browser    → Booking page / Admin dashboard
 ## Features and booking rules
 
 - Username/password login, with administrator-managed accounts, personal API keys, and daily quotas.
-- One-hour slots from 09:30 to 18:30 in `Asia/Shanghai`, available today and the next two calendar days, including weekends and holidays.
+- One-hour slots (default 09:30 to 18:30 in `Asia/Shanghai`; daily start and end times are configurable by administrators in the admin dashboard), available today and the next two calendar days, including weekends and holidays.
 - Book by model. Each model has its own capacity per time slot (default 1), editable in the admin dashboard.
 - Administrators assign each member a shared positive-integer daily quota across all models. Booking two models at the same time consumes two bookings; duplicate bookings for the same model and time are rejected.
 - Future unstarted slots can be booked ahead of time and cancelled before start to restore quota; already started slots with available capacity can be booked on-the-fly without consuming daily quota (cannot be cancelled by users once started).

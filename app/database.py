@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS reservations (
     user_id INTEGER NOT NULL REFERENCES users(id),
     model_id TEXT NOT NULL REFERENCES booking_models(id),
     date TEXT NOT NULL,
-    slot_index INTEGER NOT NULL CHECK(slot_index >= 0 AND slot_index <= 8),
+    slot_index INTEGER NOT NULL CHECK(slot_index >= 0),
     start_at TEXT NOT NULL,
     end_at TEXT NOT NULL,
     status TEXT NOT NULL CHECK(status IN ('confirmed', 'cancelled', 'maintenance_cancelled', 'admin_cancelled')),
@@ -69,10 +69,10 @@ CREATE TABLE IF NOT EXISTS reservations (
 
 CREATE INDEX IF NOT EXISTS idx_reservations_date ON reservations(date);
 CREATE INDEX IF NOT EXISTS idx_reservations_user_id ON reservations(user_id);
-CREATE INDEX IF NOT EXISTS idx_reservations_model_slot_confirmed
-ON reservations(model_id, date, slot_index) WHERE status = 'confirmed';
-CREATE UNIQUE INDEX IF NOT EXISTS idx_reservations_user_model_slot_confirmed
-ON reservations(user_id, model_id, date, slot_index) WHERE status = 'confirmed';
+CREATE INDEX IF NOT EXISTS idx_reservations_model_start_confirmed
+ON reservations(model_id, start_at) WHERE status = 'confirmed';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_reservations_user_model_start_confirmed
+ON reservations(user_id, model_id, start_at) WHERE status = 'confirmed';
 
 CREATE TABLE IF NOT EXISTS maintenance_intervals (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -91,6 +91,11 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     action TEXT NOT NULL,
     detail TEXT NULL,
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS system_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 """
 
@@ -143,8 +148,20 @@ class Database:
     def init_db(self) -> None:
         with self.connection() as conn:
             conn.executescript(SCHEMA_SQL)
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO system_settings (key, value)
+                VALUES ('slot_start_time', '09:30'), ('slot_end_time', '18:30')
+                """
+            )
+            from app.time_utils import TimeSlotManager
+            cur_settings = conn.execute("SELECT key, value FROM system_settings WHERE key IN ('slot_start_time', 'slot_end_time')")
+            s_map = {r["key"]: r["value"] for r in cur_settings.fetchall()}
+            TimeSlotManager.set_config(
+                s_map.get("slot_start_time", "09:30"),
+                s_map.get("slot_end_time", "18:30")
+            )
 
-        with self.transaction() as conn:
             # Sync explicit configured inventory on startup
             active_ids = []
             for m in self.booking_models:
@@ -172,3 +189,4 @@ class Database:
             # Cancel unfinished confirmed reservations for inactive models atomically within startup transaction
             from app.reservation_engine import cancel_inactive_model_reservations
             cancel_inactive_model_reservations(conn)
+            conn.commit()

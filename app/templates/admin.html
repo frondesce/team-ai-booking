@@ -44,6 +44,53 @@
     </div>
 </div>
 
+<!-- 可预约时段设置 -->
+<div class="card">
+    <div class="card-title">
+        <span>每日可预约时段配置</span>
+    </div>
+    <p style="color: var(--gray-600); font-size: 0.875rem; margin-bottom: 0.75rem;">
+        设定每天开放预约的开始和结束时间。每时段固定为 1 小时，保存后立即生效。
+    </p>
+    <div style="background: var(--gray-100); padding: 0.75rem 1rem; border-radius: 0.375rem; margin-bottom: 1.25rem; font-size: 0.875rem;">
+        当前配置：每日 <strong>{{ time_slot_config.start_time }}</strong> 至 <strong>{{ time_slot_config.end_time }}</strong>，共 <strong>{{ time_slot_config.slots|length }}</strong> 个时段（每段 1 小时）。
+    </div>
+    <form action="/app/admin/time-slots" method="POST"
+          onsubmit="return confirm('调整可预约时段将使不在新时段内的未结束有效预约自动取消并返还额度，确定继续保存吗？');"
+          style="display: flex; flex-wrap: wrap; gap: 1rem; align-items: flex-end;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div>
+            <label for="start_time_select" style="display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.35rem;">开始时间</label>
+            <select id="start_time_select" name="start_time" onchange="updateEndTimeOptions()" required
+                    style="height: 38px; border: 1px solid var(--gray-300); border-radius: 0.375rem; padding: 0 0.75rem; font-size: 0.875rem; background: #fff;">
+                {% for h in range(24) %}
+                    {% for m in [0, 30] %}
+                        {% set t = "%02d:%02d"|format(h, m) %}
+                        {% if not (h == 23 and m == 30) %}
+                            <option value="{{ t }}" {% if t == time_slot_config.start_time %}selected{% endif %}>{{ t }}</option>
+                        {% endif %}
+                    {% endfor %}
+                {% endfor %}
+            </select>
+        </div>
+        <div>
+            <label for="end_time_select" style="display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.35rem;">结束时间</label>
+            <select id="end_time_select" name="end_time" required
+                    style="height: 38px; border: 1px solid var(--gray-300); border-radius: 0.375rem; padding: 0 0.75rem; font-size: 0.875rem; background: #fff;">
+                {% for h in range(1, 25) %}
+                    {% for m in [0, 30] %}
+                        {% if not (h == 24 and m == 30) %}
+                            {% set t = "%02d:%02d"|format(h, m) %}
+                            <option value="{{ t }}" {% if t == time_slot_config.end_time %}selected{% endif %}>{{ t }}</option>
+                        {% endif %}
+                    {% endfor %}
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit" class="btn btn-primary" style="height: 38px;">保存时段配置</button>
+    </form>
+</div>
+
 <!-- 模型时段容量管理 -->
 <div class="card">
     <div class="card-title">
@@ -232,5 +279,40 @@
     <p style="color: var(--gray-600); font-size: 0.875rem;">当前无有效预约记录。</p>
     {% endif %}
 </div>
+
+<script>
+function updateEndTimeOptions() {
+    const startSelect = document.getElementById('start_time_select');
+    const endSelect = document.getElementById('end_time_select');
+    if (!startSelect || !endSelect) return;
+    const startVal = startSelect.value;
+    const sParts = startVal.split(':');
+    const sTotal = parseInt(sParts[0], 10) * 60 + parseInt(sParts[1], 10);
+
+    let firstValidValue = null;
+    let currentSelectedValid = false;
+
+    for (let i = 0; i < endSelect.options.length; i++) {
+        const opt = endSelect.options[i];
+        const eParts = opt.value.split(':');
+        const eTotal = parseInt(eParts[0], 10) * 60 + parseInt(eParts[1], 10);
+
+        const valid = (eTotal > sTotal) && ((eTotal - sTotal) % 60 === 0);
+        opt.disabled = !valid;
+        if (valid) {
+            if (firstValidValue === null) {
+                firstValidValue = opt.value;
+            }
+            if (opt.value === endSelect.value) {
+                currentSelectedValid = true;
+            }
+        }
+    }
+    if (!currentSelectedValid && firstValidValue !== null) {
+        endSelect.value = firstValidValue;
+    }
+}
+document.addEventListener('DOMContentLoaded', updateEndTimeOptions);
+</script>
 
 {% endblock %}

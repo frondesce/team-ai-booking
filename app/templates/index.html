@@ -120,6 +120,7 @@
                                 <input type="hidden" name="model_id" value="{{ selected_model_id }}">
                                 <input type="hidden" name="date" value="{{ cell.date }}">
                                 <input type="hidden" name="slot_index" value="{{ cell.slot_index }}">
+                                <input type="hidden" name="expected_start_time" value="{{ cell.start_time }}">
                                 <button type="submit" class="btn btn-primary btn-sm">{% if cell.is_running %}捡漏加入{% else %}预约{% endif %}</button>
                             </form>
                         {% elif cell.full and (cell.is_future or cell.is_running) %}
