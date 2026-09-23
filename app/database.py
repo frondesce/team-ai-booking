@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS reservations (
     status TEXT NOT NULL CHECK(status IN ('confirmed', 'cancelled', 'maintenance_cancelled', 'admin_cancelled')),
     cancelled_at TEXT NULL,
     cancel_reason TEXT NULL,
+    consumes_quota INTEGER NOT NULL DEFAULT 1 CHECK(consumes_quota IN (0, 1)),
     created_at TEXT NOT NULL
 );
 

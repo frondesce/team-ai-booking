@@ -67,11 +67,11 @@ def reconcile_maintenance(conn: sqlite3.Connection, now_dt: Optional[datetime.da
         m_start_str = iso_format(m_start)
         m_end_str = iso_format(m_end)
 
-        # Overlap half-open interval: start_at < m_end AND end_at > m_start
+        # Overlap half-open interval: max(start_at, created_at) < m_end AND end_at > m_start
         cur2 = conn.execute(
             """
             SELECT id, user_id FROM reservations
-            WHERE status = 'confirmed' AND start_at < ? AND end_at > ?
+            WHERE status = 'confirmed' AND max(start_at, created_at) < ? AND end_at > ?
             """,
             (m_end_str, m_start_str)
         )
@@ -128,21 +128,25 @@ def create_reservation(conn: sqlite3.Connection, user_id: int, date_str: str, sl
         raise ReservationError("invalid_slot", f"无效时段编号: {slot_index}", 400)
 
     start_dt, end_dt = get_slot_times(date_str, slot_index)
-    if now_dt >= start_dt:
-        raise ReservationError("slot_started", "只能预约尚未开始的完整时段", 409)
+    if now_dt >= end_dt:
+        raise ReservationError("slot_ended", "该时段已结束，无法预约", 409)
 
-    # Check user daily quota limit across all models
-    cur_user = conn.execute("SELECT daily_slot_limit FROM users WHERE id = ?", (user_id,))
-    user_row = cur_user.fetchone()
-    daily_limit = user_row["daily_slot_limit"] if user_row else 1
+    is_running = (start_dt <= now_dt < end_dt)
+    consumes_quota = 0 if is_running else 1
 
-    cur_count = conn.execute(
-        "SELECT COUNT(*) as count FROM reservations WHERE user_id = ? AND date = ? AND status = 'confirmed'",
-        (user_id, date_str)
-    )
-    active_count = cur_count.fetchone()["count"]
-    if active_count >= daily_limit:
-        raise ReservationError("daily_quota_exceeded", f"您在 {date_str} 的预约已达每日上限（跨模型共 {daily_limit} 次）", 409)
+    # Check user daily quota limit across all models (only for future unstarted slots)
+    if consumes_quota == 1:
+        cur_user = conn.execute("SELECT daily_slot_limit FROM users WHERE id = ?", (user_id,))
+        user_row = cur_user.fetchone()
+        daily_limit = user_row["daily_slot_limit"] if user_row else 1
+
+        cur_count = conn.execute(
+            "SELECT COUNT(*) as count FROM reservations WHERE user_id = ? AND date = ? AND status = 'confirmed' AND consumes_quota = 1",
+            (user_id, date_str)
+        )
+        active_count = cur_count.fetchone()["count"]
+        if active_count >= daily_limit:
+            raise ReservationError("daily_quota_exceeded", f"您在 {date_str} 的预约已达每日上限（跨模型共 {daily_limit} 次）", 409)
 
     # One user may book different models at once, but cannot occupy two seats
     # for the same model and time.
@@ -171,13 +175,13 @@ def create_reservation(conn: sqlite3.Connection, user_id: int, date_str: str, sl
     try:
         cur = conn.execute(
             """
-            INSERT INTO reservations (user_id, model_id, date, slot_index, start_at, end_at, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, 'confirmed', ?)
+            INSERT INTO reservations (user_id, model_id, date, slot_index, start_at, end_at, status, consumes_quota, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'confirmed', ?, ?)
             """,
-            (user_id, model_id, date_str, slot_index, start_str, end_str, now_str)
+            (user_id, model_id, date_str, slot_index, start_str, end_str, consumes_quota, now_str)
         )
         res_id = cur.lastrowid
-        add_audit_log(conn, user_id, "create_reservation", f"Reservation {res_id} created for model {model_id} on {date_str} slot {slot_index}", now_dt)
+        add_audit_log(conn, user_id, "create_reservation", f"Reservation {res_id} created for model {model_id} on {date_str} slot {slot_index} (consumes_quota={consumes_quota})", now_dt)
         return res_id
     except sqlite3.IntegrityError:
         raise ReservationError("slot_conflict", "预约冲突：您已预约该模型的这个时段", 409)
@@ -306,7 +310,7 @@ def get_schedule_grid(conn: sqlite3.Connection, current_user_id: Optional[int] =
         cur_user_res = conn.execute(
             f"""
             SELECT date, COUNT(*) AS count FROM reservations
-            WHERE user_id = ? AND date IN ({placeholders}) AND status = 'confirmed'
+            WHERE user_id = ? AND date IN ({placeholders}) AND status = 'confirmed' AND consumes_quota = 1
             GROUP BY date
             """,
             [current_user_id] + dates
@@ -381,15 +385,25 @@ def get_schedule_grid(conn: sqlite3.Connection, current_user_id: Optional[int] =
                 if own is not None:
                     occupants.append(own)
 
-            can_reserve = (
-                is_future
-                and not is_maintenance
-                and not quota_reached
-                and not full
-                and is_model_active
-                and own is None
-                and current_user_id is not None
-            )
+            if is_future:
+                can_reserve = (
+                    not is_maintenance
+                    and not quota_reached
+                    and not full
+                    and is_model_active
+                    and own is None
+                    and current_user_id is not None
+                )
+            elif is_running:
+                can_reserve = (
+                    not is_maintenance
+                    and not full
+                    and is_model_active
+                    and own is None
+                    and current_user_id is not None
+                )
+            else:
+                can_reserve = False
 
             cell = {
                 "date": d,

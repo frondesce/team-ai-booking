@@ -107,19 +107,27 @@
                             {% endif %}
                         {% elif cell.is_past %}
                             <span class="badge badge-gray" style="margin-top: 0.25rem; display: inline-block;">已结束</span>
-                        {% elif cell.is_running %}
-                            <span class="badge badge-gray" style="margin-top: 0.25rem; display: inline-block;">已开始未预约</span>
                         {% elif is_maintenance %}
                             <span class="badge badge-danger" style="margin-top: 0.25rem; display: inline-block;">系统维护</span>
                         {% elif cell.can_reserve %}
+                            {% if cell.is_running %}
+                                <div style="margin-bottom: 0.25rem;">
+                                    <span class="badge badge-success">进行中</span>
+                                </div>
+                            {% endif %}
                             <form action="/app/reservations" method="POST" style="margin-top: 0.25rem;">
                                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                                 <input type="hidden" name="model_id" value="{{ selected_model_id }}">
                                 <input type="hidden" name="date" value="{{ cell.date }}">
                                 <input type="hidden" name="slot_index" value="{{ cell.slot_index }}">
-                                <button type="submit" class="btn btn-primary btn-sm">预约</button>
+                                <button type="submit" class="btn btn-primary btn-sm">{% if cell.is_running %}捡漏加入{% else %}预约{% endif %}</button>
                             </form>
-                        {% elif cell.full and cell.is_future %}
+                        {% elif cell.full and (cell.is_future or cell.is_running) %}
+                            {% if cell.is_running %}
+                                <div style="margin-bottom: 0.25rem;">
+                                    <span class="badge badge-success">进行中</span>
+                                </div>
+                            {% endif %}
                             <span class="badge badge-gray" style="margin-top: 0.25rem; display: inline-block;">已约满</span>
                         {% elif cell.quota_reached and cell.is_future %}
                             <button type="button" class="btn btn-secondary btn-sm" disabled style="margin-top: 0.25rem;">额度已满</button>
@@ -155,7 +163,8 @@
         <strong>预约规则提示：</strong><br>
         1. 可以在同时段预约不同模型，每个模型各占一次额度。<br>
         2. 取消未开始的预约会返还对应额度，时段一旦到达开始时间即不可自行取消。<br>
-        3. 系统维护期间预约及调用暂停。
+        3. 进行中时段若有空闲名额可立即使用且不消耗个人额度。<br>
+        4. 系统维护期间预约及调用暂停。
     </div>
 </div>
 

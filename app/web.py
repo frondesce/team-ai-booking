@@ -9,7 +9,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from app.config import AppConfig
 from app.database import Database
-from app.time_utils import TimeProvider, iso_format
+from app.time_utils import TimeProvider, iso_format, get_slot_times
 from app.models import (
     get_session, create_session, delete_session, get_user_by_id,
     get_user_by_username, update_user_password, set_user_active,
@@ -343,7 +343,11 @@ class WebHandler:
             try:
                 with self.db.transaction() as conn:
                     create_reservation(conn, session["user_id"], date_str, slot_index, now, model_id=model_id)
-                msg = urllib.parse.quote(f"成功预约 {m['model_name']} 在 {date_str} 第 {slot_index + 1} 时段！")
+                start_dt, end_dt = get_slot_times(date_str, slot_index)
+                if start_dt <= now < end_dt:
+                    msg = urllib.parse.quote(f"已成功开通 {m['model_name']} 当前时段（不消耗每日额度），可立即使用！")
+                else:
+                    msg = urllib.parse.quote(f"成功预约 {m['model_name']} 在 {date_str} 第 {slot_index + 1} 时段！")
                 http_handler.redirect(f"/app/?model_id={urllib.parse.quote(model_id)}&success={msg}")
             except ReservationError as e:
                 msg = urllib.parse.quote(e.message)
