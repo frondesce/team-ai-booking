@@ -7,7 +7,7 @@
 <!-- 系统维护控制 -->
 <div class="card">
     <div class="card-title">
-        <span>系统维护状态控制</span>
+        <span>系统维护状态</span>
         {% if is_maintenance %}
             <span class="badge badge-danger">维护中</span>
         {% else %}
@@ -47,7 +47,7 @@
 <!-- 可预约时段设置 -->
 <div class="card">
     <div class="card-title">
-        <span>每日可预约时段配置</span>
+        <span>每日可预约时段</span>
     </div>
     <p style="color: var(--gray-600); font-size: 0.875rem; margin-bottom: 0.75rem;">
         设定每天开放预约的开始和结束时间。每时段固定为 1 小时，保存后立即生效。
@@ -94,7 +94,7 @@
 <!-- 模型时段容量管理 -->
 <div class="card">
     <div class="card-title">
-        <span>各模型每时段预约人数</span>
+        <span>各模型每时段可预约人数</span>
     </div>
     <p style="color: var(--gray-600); font-size: 0.875rem; margin-bottom: 1rem;">
         每个模型的上限适用于所有时段。保存后立即生效；调低人数会保留已有预约，已满时段不能新增预约。
@@ -129,7 +129,7 @@
 <!-- 成员管理 -->
 <div class="card">
     <div class="card-title">
-        <span>团队成员管理</span>
+        <span>团队成员</span>
     </div>
 
     <p style="color: var(--gray-600); font-size: 0.875rem; margin-bottom: 1rem;">每日额度由所有模型共用，同时预约多个模型扣多次额度。</p>
