@@ -19,7 +19,7 @@
         <div>
             {% if is_maintenance %}
             <p style="color: var(--danger); font-weight: 600;">
-                系统处于维护状态（始于 {{ active_maintenance.started_at }}）。<br>
+                系统处于维护状态（始于 {{ active_maintenance.started_at[:19].replace('T', ' ') }}）。<br>
                 所有代理推理请求将直接拒绝（503），暂停所有新预约；受影响预约已作废并返还额度。
             </p>
             {% else %}
